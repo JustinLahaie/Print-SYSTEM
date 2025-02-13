@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "3UIXi/lQpuw=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\justi\\Print System\\PrintSystem.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\justi\\.nuget\\packages\\htmlagilitypack\\1.11.59\\htmlagilitypack.1.11.59.nupkg.sha512"
+  ],
+  "logs": []
+}
