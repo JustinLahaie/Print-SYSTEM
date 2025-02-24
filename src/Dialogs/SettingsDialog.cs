@@ -10,9 +10,10 @@ namespace PrintSystem.Dialogs
     {
         private NumericUpDown labelWidthInput;
         private NumericUpDown labelHeightInput;
-        private NumericUpDown labelMarginInput;
         private Button saveButton;
         private Button cancelButton;
+        private Button labelBuilderButton;
+        private Button qrBuilderButton;
 
         public SettingsDialog()
         {
@@ -23,9 +24,9 @@ namespace PrintSystem.Dialogs
         private void InitializeComponents()
         {
             this.Text = "Settings";
-            this.Size = new Size(400, 300);
-            this.MinimumSize = new Size(350, 250);
-            this.FormBorderStyle = FormBorderStyle.Sizable;
+            this.Size = new Size(400, 400);  // Increased height
+            this.MinimumSize = new Size(350, 400);  // Increased minimum height
+            this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.StartPosition = FormStartPosition.CenterParent;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
@@ -34,27 +35,30 @@ namespace PrintSystem.Dialogs
             {
                 Dock = DockStyle.Fill,
                 Padding = new Padding(10),
-                RowCount = 5,
-                ColumnCount = 2
+                RowCount = 3,
+                ColumnCount = 1
             };
 
-            // Make columns scale properly
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));  // Labels
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));  // Inputs
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));  // Label Size group
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));  // Label Tools group
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));  // Buttons
 
             // Label Size group
             GroupBox labelSizeGroup = new GroupBox
             {
                 Text = "Label Size",
-                Dock = DockStyle.Fill,
-                Padding = new Padding(10)
+                AutoSize = true,
+                Padding = new Padding(10),
+                Margin = new Padding(0, 0, 0, 15)  // Increased bottom margin
             };
 
             TableLayoutPanel labelSizeLayout = new TableLayoutPanel
             {
-                Dock = DockStyle.Fill,
-                RowCount = 3,
-                ColumnCount = 2
+                AutoSize = true,
+                RowCount = 2,
+                ColumnCount = 2,
+                Padding = new Padding(0),
+                Margin = new Padding(0, 5, 0, 0)  // Added top margin
             };
 
             // Width
@@ -81,27 +85,59 @@ namespace PrintSystem.Dialogs
             };
             labelSizeLayout.Controls.Add(labelHeightInput, 1, 1);
 
-            // Margin
-            labelSizeLayout.Controls.Add(new Label { Text = "Margin (mm):", Anchor = AnchorStyles.Left }, 0, 2);
-            labelMarginInput = new NumericUpDown
-            {
-                Minimum = 0,
-                Maximum = 50,
-                DecimalPlaces = 1,
-                Increment = 0.5M,
-                Width = 100
-            };
-            labelSizeLayout.Controls.Add(labelMarginInput, 1, 2);
-
             labelSizeGroup.Controls.Add(labelSizeLayout);
             mainLayout.Controls.Add(labelSizeGroup, 0, 0);
-            mainLayout.SetColumnSpan(labelSizeGroup, 2);
 
-            // Buttons
+            // Label Tools group
+            GroupBox labelToolsGroup = new GroupBox
+            {
+                Text = "Label Tools",
+                AutoSize = true,
+                Padding = new Padding(10),
+                Margin = new Padding(0, 0, 0, 15)  // Increased bottom margin
+            };
+
+            TableLayoutPanel labelToolsLayout = new TableLayoutPanel
+            {
+                AutoSize = true,
+                RowCount = 2,
+                ColumnCount = 1,
+                Padding = new Padding(0),
+                Margin = new Padding(0, 5, 0, 0)  // Added top margin
+            };
+
+            // Label Builder Button
+            labelBuilderButton = new Button
+            {
+                Text = "Label Builder",
+                Width = 200,
+                Height = 30,
+                Margin = new Padding(0, 0, 0, 10),  // Increased bottom margin
+                Anchor = AnchorStyles.None
+            };
+            labelBuilderButton.Click += LabelBuilderButton_Click;
+            labelToolsLayout.Controls.Add(labelBuilderButton, 0, 0);
+
+            // QR Builder Button
+            qrBuilderButton = new Button
+            {
+                Text = "QR Builder",
+                Width = 200,
+                Height = 30,
+                Margin = new Padding(0),
+                Anchor = AnchorStyles.None
+            };
+            qrBuilderButton.Click += QRBuilderButton_Click;
+            labelToolsLayout.Controls.Add(qrBuilderButton, 0, 1);
+
+            labelToolsGroup.Controls.Add(labelToolsLayout);
+            mainLayout.Controls.Add(labelToolsGroup, 0, 1);
+
+            // Buttons panel
             Panel buttonPanel = new Panel
             {
-                Dock = DockStyle.Bottom,
-                Height = 40
+                Height = 40,
+                Margin = new Padding(0, 5, 0, 0)  // Added top margin
             };
 
             saveButton = new Button
@@ -109,7 +145,7 @@ namespace PrintSystem.Dialogs
                 Text = "Save",
                 DialogResult = DialogResult.OK,
                 Width = 80,
-                Location = new Point(buttonPanel.Width - 170, 10)
+                Height = 30
             };
             saveButton.Click += SaveButton_Click;
 
@@ -118,12 +154,14 @@ namespace PrintSystem.Dialogs
                 Text = "Cancel",
                 DialogResult = DialogResult.Cancel,
                 Width = 80,
-                Location = new Point(buttonPanel.Width - 85, 10)
+                Height = 30
             };
 
+            // Position buttons
+            saveButton.Location = new Point(buttonPanel.Width - 170, 5);
+            cancelButton.Location = new Point(buttonPanel.Width - 85, 5);
             buttonPanel.Controls.AddRange(new Control[] { saveButton, cancelButton });
-            mainLayout.Controls.Add(buttonPanel, 0, 4);
-            mainLayout.SetColumnSpan(buttonPanel, 2);
+            mainLayout.Controls.Add(buttonPanel, 0, 2);
 
             this.Controls.Add(mainLayout);
             this.AcceptButton = saveButton;
@@ -136,7 +174,6 @@ namespace PrintSystem.Dialogs
             var settings = SettingsManager.GetSettings();
             labelWidthInput.Value = (decimal)settings.LabelWidth;
             labelHeightInput.Value = (decimal)settings.LabelHeight;
-            labelMarginInput.Value = (decimal)settings.LabelMargin;
         }
 
         private void SaveButton_Click(object sender, EventArgs e)
@@ -146,10 +183,26 @@ namespace PrintSystem.Dialogs
             {
                 LabelWidth = (double)labelWidthInput.Value,
                 LabelHeight = (double)labelHeightInput.Value,
-                LabelMargin = (double)labelMarginInput.Value
+                LabelMargin = 2.0 // Use default margin value
             };
 
             SettingsManager.SaveSettings(settings);
+        }
+
+        private void LabelBuilderButton_Click(object sender, EventArgs e)
+        {
+            using (var labelBuilder = new LabelBuilderDialog())
+            {
+                labelBuilder.ShowDialog();
+            }
+        }
+
+        private void QRBuilderButton_Click(object sender, EventArgs e)
+        {
+            using (var qrBuilder = new QRBuilderDialog())
+            {
+                qrBuilder.ShowDialog();
+            }
         }
     }
 } 
