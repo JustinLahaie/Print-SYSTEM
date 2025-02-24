@@ -8,13 +8,14 @@ using System.Text.RegularExpressions;
 using System.Linq;
 using System.Collections.Generic;
 
-public class RichelieuScraper
+public class MarathonScraper
 {
     public class ScrapedProduct
     {
         public string ModelNumber { get; set; }
         public string Description { get; set; }
         public List<string> ImageUrls { get; set; } = new List<string>();
+        public string SelectedImageUrl { get; set; }
     }
 
     public static async Task<ScrapedProduct> ScrapeProductAsync(string url)
@@ -23,11 +24,8 @@ public class RichelieuScraper
         {
             var product = new ScrapedProduct();
 
-            // Extract model number from URL
-            if (url.Contains("sku-"))
-            {
-                product.ModelNumber = url.Substring(url.LastIndexOf("sku-") + 4);
-            }
+            // Extract model number from URL (it's after the last slash)
+            product.ModelNumber = url.Split('/').Last();
 
             using (var client = new HttpClient())
             {
@@ -36,60 +34,59 @@ public class RichelieuScraper
                 var doc = new HtmlAgilityPack.HtmlDocument();
                 doc.LoadHtml(html);
 
+                Console.WriteLine("HTML Content:");
+                Console.WriteLine(html.Substring(0, Math.Min(1000, html.Length)));
+
                 // Get description (product title)
-                var titleNode = doc.DocumentNode.SelectSingleNode("//h1");
+                var titleNode = doc.DocumentNode.SelectSingleNode("//h1") ?? 
+                              doc.DocumentNode.SelectSingleNode("//div[contains(@class, 'product-title')]") ??
+                              doc.DocumentNode.SelectSingleNode("//div[contains(@class, 'title')]");
+                
                 if (titleNode != null)
                 {
                     product.Description = titleNode.InnerText.Trim();
+                    Console.WriteLine($"Found title: {product.Description}");
                 }
 
                 Console.WriteLine("Searching for product images...");
                 
-                // First try to find the main product image specifically
-                var mainProductImage = doc.DocumentNode.SelectSingleNode("//div[contains(@class, 'pms-AddCartBlocTop')]//img | //div[contains(@class, 'product-main-image')]//img");
-                if (mainProductImage != null)
+                // Get all main product images
+                var mainProductImages = doc.DocumentNode.SelectNodes("//img[@id='main_picture']");
+                if (mainProductImages != null)
                 {
-                    Console.WriteLine("Found main product image");
-                    var imgUrl = GetBestImageUrl(mainProductImage);
-                    if (!string.IsNullOrEmpty(imgUrl) && !product.ImageUrls.Contains(imgUrl))
+                    foreach (var img in mainProductImages)
                     {
-                        product.ImageUrls.Add(imgUrl);
-                        Console.WriteLine($"Added main product image URL: {imgUrl}");
+                        var src = img.GetAttributeValue("src", "");
+                        if (!string.IsNullOrEmpty(src) && !product.ImageUrls.Contains(src))
+                        {
+                            product.ImageUrls.Add(src);
+                            Console.WriteLine($"Found main product image: {src}");
+                        }
                     }
                 }
 
-                // Look for additional product images
-                var productImages = doc.DocumentNode.SelectNodes("//div[not(contains(@class, 'suggested')) and not(contains(@class, 'related'))]//img[contains(@class, 'ts-ImgMain') or contains(@class, 'itemImg') or contains(@class, 'pms-AddCartBlocTop_Image')]");
-                
+                // Also look for other product images
+                var productImages = doc.DocumentNode.SelectNodes("//img[contains(@src, 'products/')]");
                 if (productImages != null)
                 {
-                    Console.WriteLine($"Found {productImages.Count} potential additional product images");
                     foreach (var img in productImages)
                     {
-                        Console.WriteLine("\nChecking product image:");
-                        var className = img.GetAttributeValue("class", "");
-                        var alt = img.GetAttributeValue("alt", "");
+                        var src = img.GetAttributeValue("src", "");
                         
-                        // Skip images that are clearly not product images
-                        if (alt.Contains("delete") || alt.Contains("print"))
+                        // Skip thumbnails, icons, and duplicates
+                        if (!string.IsNullOrEmpty(src) && 
+                            !src.Contains("icon") && 
+                            !src.Contains("logo") && 
+                            !src.Contains("thumb") && 
+                            !product.ImageUrls.Contains(src))
                         {
-                            Console.WriteLine("Skipping non-product image");
-                            continue;
-                        }
-
-                        var imgUrl = GetBestImageUrl(img);
-                        if (!string.IsNullOrEmpty(imgUrl) && !product.ImageUrls.Contains(imgUrl))
-                        {
-                            product.ImageUrls.Add(imgUrl);
-                            Console.WriteLine($"Added additional product image URL: {imgUrl}");
+                            product.ImageUrls.Add(src);
+                            Console.WriteLine($"Found additional product image: {src}");
                         }
                     }
                 }
-                else
-                {
-                    Console.WriteLine("No additional product images found");
-                }
 
+                Console.WriteLine($"Total images found: {product.ImageUrls.Count}");
                 return product;
             }
         }
@@ -97,58 +94,6 @@ public class RichelieuScraper
         {
             throw new Exception($"Failed to scrape product information: {ex.Message}");
         }
-    }
-
-    private static string GetBestImageUrl(HtmlNode img)
-    {
-        var src = img.GetAttributeValue("src", "");
-        var dataSrc = img.GetAttributeValue("data-src", "");
-        var dataZoomImage = img.GetAttributeValue("data-zoom-image", "");
-
-        Console.WriteLine($"src: {src}");
-        Console.WriteLine($"data-src: {dataSrc}");
-        Console.WriteLine($"data-zoom-image: {dataZoomImage}");
-
-        // Skip images from static folders
-        if (src.Contains("/img/") || src.Contains("/images/") || string.IsNullOrEmpty(src))
-        {
-            return null;
-        }
-
-        // Try to get the highest resolution image URL
-        string imgUrl = dataZoomImage;
-        if (string.IsNullOrEmpty(imgUrl))
-        {
-            imgUrl = dataSrc;
-        }
-        if (string.IsNullOrEmpty(imgUrl))
-        {
-            imgUrl = src;
-        }
-
-        if (!string.IsNullOrEmpty(imgUrl))
-        {
-            // Clean up the URL
-            imgUrl = imgUrl.Replace("&amp;", "&");
-            
-            // Add domain if it's a relative URL
-            if (!imgUrl.StartsWith("http"))
-            {
-                imgUrl = imgUrl.StartsWith("/") 
-                    ? "https://www.richelieu.com" + imgUrl 
-                    : "https://www.richelieu.com/" + imgUrl;
-            }
-
-            // Try to get higher resolution version
-            if (!imgUrl.Contains("_700.jpg"))
-            {
-                imgUrl = imgUrl.Replace("_300.jpg", "_700.jpg");
-            }
-            
-            return imgUrl;
-        }
-
-        return null;
     }
 
     public static async Task<List<string>> DownloadImagesAsync(List<string> imageUrls, string destinationFolder)
