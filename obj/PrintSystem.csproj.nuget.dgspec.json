@@ -48,6 +48,10 @@
             "HtmlAgilityPack": {
               "target": "Package",
               "version": "[1.11.59, )"
+            },
+            "ZXing.Net.Bindings.Windows.Compatibility": {
+              "target": "Package",
+              "version": "[0.16.13, )"
             }
           },
           "imports": [
