@@ -36,6 +36,9 @@ namespace PrintSystem.Dialogs
         private Dictionary<string, string> savedTemplates = new Dictionary<string, string>();
         private const string TEMPLATES_FILE = "qr_templates.json";
 
+        // Property to expose the generated QR code image
+        public Image QRImage => qrPreview?.Image;
+
         public QRBuilderDialog(Item item = null)
         {
             currentItem = item;

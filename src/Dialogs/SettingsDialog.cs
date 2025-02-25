@@ -8,8 +8,7 @@ namespace PrintSystem.Dialogs
 {
     public class SettingsDialog : Form
     {
-        private NumericUpDown labelWidthInput;
-        private NumericUpDown labelHeightInput;
+        private ComboBox defaultLabelComboBox;
         private Button saveButton;
         private Button cancelButton;
         private Button labelBuilderButton;
@@ -24,8 +23,8 @@ namespace PrintSystem.Dialogs
         private void InitializeComponents()
         {
             this.Text = "Settings";
-            this.Size = new Size(400, 400);  // Increased height
-            this.MinimumSize = new Size(350, 400);  // Increased minimum height
+            this.Size = new Size(400, 400);
+            this.MinimumSize = new Size(350, 400);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.StartPosition = FormStartPosition.CenterParent;
             this.MaximizeBox = false;
@@ -39,54 +38,45 @@ namespace PrintSystem.Dialogs
                 ColumnCount = 1
             };
 
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));  // Label Size group
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));  // Label Settings group
             mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));  // Label Tools group
             mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));  // Buttons
 
-            // Label Size group
-            GroupBox labelSizeGroup = new GroupBox
+            // Label Settings group
+            GroupBox labelSettingsGroup = new GroupBox
             {
-                Text = "Label Size",
+                Text = "Label Settings",
                 AutoSize = true,
                 Padding = new Padding(10),
-                Margin = new Padding(0, 0, 0, 15)  // Increased bottom margin
+                Margin = new Padding(0, 0, 0, 15)
             };
 
-            TableLayoutPanel labelSizeLayout = new TableLayoutPanel
+            TableLayoutPanel labelSettingsLayout = new TableLayoutPanel
             {
                 AutoSize = true,
-                RowCount = 2,
+                RowCount = 1,
                 ColumnCount = 2,
                 Padding = new Padding(0),
-                Margin = new Padding(0, 5, 0, 0)  // Added top margin
+                Margin = new Padding(0, 5, 0, 0)
             };
 
-            // Width
-            labelSizeLayout.Controls.Add(new Label { Text = "Width (mm):", Anchor = AnchorStyles.Left }, 0, 0);
-            labelWidthInput = new NumericUpDown
+            // Default Label Type
+            labelSettingsLayout.Controls.Add(new Label { Text = "Default Label:", Anchor = AnchorStyles.Left }, 0, 0);
+            defaultLabelComboBox = new ComboBox
             {
-                Minimum = 10,
-                Maximum = 500,
-                DecimalPlaces = 1,
-                Increment = 0.5M,
-                Width = 100
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Width = 150
             };
-            labelSizeLayout.Controls.Add(labelWidthInput, 1, 0);
+            defaultLabelComboBox.Items.AddRange(new object[] {
+                "Basic Label",
+                "Product Label",
+                "Price Label",
+                "Custom"
+            });
+            labelSettingsLayout.Controls.Add(defaultLabelComboBox, 1, 0);
 
-            // Height
-            labelSizeLayout.Controls.Add(new Label { Text = "Height (mm):", Anchor = AnchorStyles.Left }, 0, 1);
-            labelHeightInput = new NumericUpDown
-            {
-                Minimum = 10,
-                Maximum = 500,
-                DecimalPlaces = 1,
-                Increment = 0.5M,
-                Width = 100
-            };
-            labelSizeLayout.Controls.Add(labelHeightInput, 1, 1);
-
-            labelSizeGroup.Controls.Add(labelSizeLayout);
-            mainLayout.Controls.Add(labelSizeGroup, 0, 0);
+            labelSettingsGroup.Controls.Add(labelSettingsLayout);
+            mainLayout.Controls.Add(labelSettingsGroup, 0, 0);
 
             // Label Tools group
             GroupBox labelToolsGroup = new GroupBox
@@ -94,7 +84,7 @@ namespace PrintSystem.Dialogs
                 Text = "Label Tools",
                 AutoSize = true,
                 Padding = new Padding(10),
-                Margin = new Padding(0, 0, 0, 15)  // Increased bottom margin
+                Margin = new Padding(0, 0, 0, 15)
             };
 
             TableLayoutPanel labelToolsLayout = new TableLayoutPanel
@@ -103,7 +93,7 @@ namespace PrintSystem.Dialogs
                 RowCount = 2,
                 ColumnCount = 1,
                 Padding = new Padding(0),
-                Margin = new Padding(0, 5, 0, 0)  // Added top margin
+                Margin = new Padding(0, 5, 0, 0)
             };
 
             // Label Builder Button
@@ -112,7 +102,7 @@ namespace PrintSystem.Dialogs
                 Text = "Label Builder",
                 Width = 200,
                 Height = 30,
-                Margin = new Padding(0, 0, 0, 10),  // Increased bottom margin
+                Margin = new Padding(0, 0, 0, 10),
                 Anchor = AnchorStyles.None
             };
             labelBuilderButton.Click += LabelBuilderButton_Click;
@@ -137,7 +127,7 @@ namespace PrintSystem.Dialogs
             Panel buttonPanel = new Panel
             {
                 Height = 40,
-                Margin = new Padding(0, 5, 0, 0)  // Added top margin
+                Margin = new Padding(0, 5, 0, 0)
             };
 
             saveButton = new Button
@@ -172,8 +162,13 @@ namespace PrintSystem.Dialogs
         {
             // Load settings from SettingsManager
             var settings = SettingsManager.GetSettings();
-            labelWidthInput.Value = (decimal)settings.LabelWidth;
-            labelHeightInput.Value = (decimal)settings.LabelHeight;
+            defaultLabelComboBox.SelectedItem = settings.DefaultLabelType;
+            
+            // If the saved label type isn't in the list, select Basic Label
+            if (defaultLabelComboBox.SelectedItem == null)
+            {
+                defaultLabelComboBox.SelectedItem = "Basic Label";
+            }
         }
 
         private void SaveButton_Click(object sender, EventArgs e)
@@ -181,8 +176,7 @@ namespace PrintSystem.Dialogs
             // Save settings to SettingsManager
             var settings = new Settings
             {
-                LabelWidth = (double)labelWidthInput.Value,
-                LabelHeight = (double)labelHeightInput.Value,
+                DefaultLabelType = defaultLabelComboBox.SelectedItem.ToString(),
                 LabelMargin = 2.0 // Use default margin value
             };
 
