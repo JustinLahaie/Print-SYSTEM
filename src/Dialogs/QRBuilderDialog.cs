@@ -27,7 +27,6 @@ namespace PrintSystem.Dialogs
         private Button printButton;
         private PictureBox qrPreview;
         private ComboBox templateComboBox;
-        private Button saveTemplateButton;
         private Label previewLabel;
 
         // Store the current item if we're generating from an item context

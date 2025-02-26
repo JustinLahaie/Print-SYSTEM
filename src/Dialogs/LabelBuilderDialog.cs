@@ -11,6 +11,7 @@ using System.IO;
 using ZXing;
 using ZXing.QrCode;
 using ZXing.Windows.Compatibility;
+using System.Linq;
 
 namespace PrintSystem.Dialogs
 {
@@ -37,8 +38,6 @@ namespace PrintSystem.Dialogs
         private Panel toolbox;
         private ListBox availableFieldsListBox;
         private ComboBox templateComboBox;
-        private Button saveTemplateButton;
-        private Button loadTemplateButton;
         private Button printButton;
         private Button generateQRButton;
         private NumericUpDown labelWidthInput;
@@ -1185,8 +1184,228 @@ namespace PrintSystem.Dialogs
 
         private void PrintButton_Click(object sender, EventArgs e)
         {
-            // TODO: Implement print preview and printing
-            MessageBox.Show("Print preview will be implemented in a future update.", "Coming Soon");
+            // Get any item to use as a sample
+            var items = ItemManager.GetItems();
+            if (!items.Any())
+            {
+                MessageBox.Show("Please add at least one item to show a print preview.", "No Items", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            // Use the first item as a sample
+            var sampleItem = items.First();
+
+            // Create a preview form
+            using (var previewForm = new Form())
+            {
+                previewForm.Text = "Print Preview";
+                previewForm.Size = new Size(800, 600);
+                previewForm.StartPosition = FormStartPosition.CenterParent;
+                previewForm.MinimizeBox = false;
+                previewForm.MaximizeBox = false;
+                previewForm.FormBorderStyle = FormBorderStyle.FixedDialog;
+
+                // Create preview panel
+                Panel previewPanel = new Panel
+                {
+                    Dock = DockStyle.Fill,
+                    BackColor = Color.LightGray,
+                    AutoScroll = true
+                };
+
+                // Create a white panel to represent the paper
+                Panel paperPanel = new Panel
+                {
+                    BackColor = Color.White,
+                    Location = new Point(20, 20),
+                    Size = new Size(
+                        (int)((double)labelWidthInput.Value * DPI_SCALE),
+                        (int)((double)labelHeightInput.Value * DPI_SCALE)
+                    ),
+                    Margin = new Padding(0)
+                };
+
+                // Add paint handler for the paper panel
+                paperPanel.Paint += (s, pe) =>
+                {
+                    pe.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                    
+                    // Draw all elements with actual item data
+                    foreach (var element in labelElements)
+                    {
+                        // Create adjusted bounds without margin offset
+                        var adjustedBounds = new Rectangle(
+                            element.Bounds.X - MARGIN,
+                            element.Bounds.Y - MARGIN,
+                            element.Bounds.Width,
+                            element.Bounds.Height
+                        );
+
+                        // Ensure bounds are within the label area
+                        if (adjustedBounds.X < 0) adjustedBounds.X = 0;
+                        if (adjustedBounds.Y < 0) adjustedBounds.Y = 0;
+                        if (adjustedBounds.Right > paperPanel.Width) adjustedBounds.Width = paperPanel.Width - adjustedBounds.X;
+                        if (adjustedBounds.Bottom > paperPanel.Height) adjustedBounds.Height = paperPanel.Height - adjustedBounds.Y;
+
+                        if (element is TextElement textElement)
+                        {
+                            // Get the actual text with item data
+                            string text = textElement.GetText();
+                            // Replace placeholders with actual values
+                            switch (text)
+                            {
+                                case "Model Number":
+                                    text = sampleItem.ModelNumber ?? "";
+                                    break;
+                                case "Description":
+                                    text = sampleItem.Description ?? "";
+                                    break;
+                                case "Supplier":
+                                    text = sampleItem.Supplier ?? "";
+                                    break;
+                                case "Category":
+                                    text = sampleItem.CategoryPath ?? "Uncategorized";
+                                    break;
+                                case "Default Order Quantity":
+                                    text = sampleItem.DefaultOrderQuantity.ToString();
+                                    break;
+                                case "Product URL":
+                                    text = sampleItem.ProductUrl ?? "";
+                                    break;
+                                default:
+                                    // If it contains placeholders in curly braces
+                                    if (text.Contains("{"))
+                                    {
+                                        text = text.Replace("{ModelNumber}", sampleItem.ModelNumber ?? "")
+                                                 .Replace("{Description}", sampleItem.Description ?? "")
+                                                 .Replace("{Supplier}", sampleItem.Supplier ?? "")
+                                                 .Replace("{Category}", sampleItem.CategoryPath ?? "Uncategorized")
+                                                 .Replace("{DefaultOrderQuantity}", sampleItem.DefaultOrderQuantity.ToString())
+                                                 .Replace("{ProductURL}", sampleItem.ProductUrl ?? "");
+                                    }
+                                    break;
+                            }
+
+                            // Draw text with the same font and position
+                            using (var font = new Font(textElement.GetFontFamily(), textElement.GetFontSize()))
+                            {
+                                var format = new StringFormat
+                                {
+                                    Alignment = StringAlignment.Center,
+                                    LineAlignment = StringAlignment.Center
+                                };
+                                pe.Graphics.DrawString(text, font, Brushes.Black, adjustedBounds, format);
+                            }
+                        }
+                        else if (element is QRElement qrElement)
+                        {
+                            // Get the QR template content and replace placeholders
+                            string templateName = qrTemplateComboBox.SelectedItem?.ToString() ?? "Basic Info";
+                            string content;
+
+                            if (qrTemplates.ContainsKey(templateName))
+                            {
+                                content = qrTemplates[templateName];
+                            }
+                            else
+                            {
+                                // Use default template content
+                                content = "Model: {ModelNumber} | Description: {Description}";
+                            }
+
+                            // Replace placeholders with actual values
+                            content = content.Replace("{ModelNumber}", sampleItem.ModelNumber ?? "")
+                                           .Replace("{Description}", sampleItem.Description ?? "")
+                                           .Replace("{Supplier}", sampleItem.Supplier ?? "")
+                                           .Replace("{Category}", sampleItem.CategoryPath ?? "Uncategorized")
+                                           .Replace("{DefaultOrderQuantity}", sampleItem.DefaultOrderQuantity.ToString())
+                                           .Replace("{ProductURL}", sampleItem.ProductUrl ?? "");
+
+                            // Generate new QR code with actual data
+                            try
+                            {
+                                var writer = new BarcodeWriter<Bitmap>
+                                {
+                                    Format = BarcodeFormat.QR_CODE,
+                                    Options = new QrCodeEncodingOptions
+                                    {
+                                        Width = adjustedBounds.Width,
+                                        Height = adjustedBounds.Height,
+                                        Margin = 1,
+                                        ErrorCorrection = ZXing.QrCode.Internal.ErrorCorrectionLevel.M
+                                    },
+                                    Renderer = new BitmapRenderer()
+                                };
+
+                                using (var qrImage = writer.Write(content))
+                                {
+                                    pe.Graphics.DrawImage(qrImage, adjustedBounds);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                MessageBox.Show($"Error generating QR code preview: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            }
+                        }
+                        else if (element is ImageElement imageElement)
+                        {
+                            // For image elements, use the current item's image if available
+                            string imagePath = sampleItem.ImagePath;
+                            if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
+                            {
+                                try
+                                {
+                                    using (var image = Image.FromFile(imagePath))
+                                    {
+                                        pe.Graphics.DrawImage(image, adjustedBounds);
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    MessageBox.Show($"Error loading image for preview: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                }
+                            }
+                        }
+                    }
+                };
+
+                // Add print button
+                Button printButton = new Button
+                {
+                    Text = "Print",
+                    Dock = DockStyle.Bottom,
+                    Height = 40
+                };
+                printButton.Click += (s, pe) =>
+                {
+                    using (var printDialog = new PrintDialog())
+                    {
+                        if (printDialog.ShowDialog() == DialogResult.OK)
+                        {
+                            // TODO: Implement actual printing in a future update
+                            MessageBox.Show("Printing will be implemented in a future update.", "Coming Soon");
+                        }
+                    }
+                };
+
+                // Add close button
+                Button closeButton = new Button
+                {
+                    Text = "Close",
+                    Dock = DockStyle.Bottom,
+                    Height = 40
+                };
+                closeButton.Click += (s, pe) => previewForm.Close();
+
+                // Add controls to the preview form
+                previewPanel.Controls.Add(paperPanel);
+                previewForm.Controls.Add(previewPanel);
+                previewForm.Controls.Add(printButton);
+                previewForm.Controls.Add(closeButton);
+
+                // Show the preview
+                previewForm.ShowDialog();
+            }
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
