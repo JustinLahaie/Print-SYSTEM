@@ -3,6 +3,9 @@ using System.Windows.Forms;
 using System.Drawing;
 using PrintSystem.Models;
 using PrintSystem.Managers;
+using System.IO;
+using System.Text.Json;
+using System.Collections.Generic;
 
 namespace PrintSystem.Dialogs
 {
@@ -13,11 +16,35 @@ namespace PrintSystem.Dialogs
         private Button cancelButton;
         private Button labelBuilderButton;
         private Button qrBuilderButton;
+        private Dictionary<string, LabelTemplate> labelTemplates;
+        private const string LABEL_TEMPLATES_FILE = "label_templates.json";
 
         public SettingsDialog()
         {
+            LoadLabelTemplates();
             InitializeComponents();
             LoadCurrentSettings();
+        }
+
+        private void LoadLabelTemplates()
+        {
+            try
+            {
+                if (File.Exists(LABEL_TEMPLATES_FILE))
+                {
+                    string json = File.ReadAllText(LABEL_TEMPLATES_FILE);
+                    labelTemplates = JsonSerializer.Deserialize<Dictionary<string, LabelTemplate>>(json);
+                }
+                else
+                {
+                    labelTemplates = new Dictionary<string, LabelTemplate>();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error loading label templates: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                labelTemplates = new Dictionary<string, LabelTemplate>();
+            }
         }
 
         private void InitializeComponents()
@@ -67,12 +94,24 @@ namespace PrintSystem.Dialogs
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Width = 150
             };
-            defaultLabelComboBox.Items.AddRange(new object[] {
-                "Basic Label",
-                "Product Label",
-                "Price Label",
-                "Custom"
-            });
+            defaultLabelComboBox.Items.Clear();
+
+            // Add MAIN template first if it exists
+            if (labelTemplates.ContainsKey("MAIN"))
+            {
+                defaultLabelComboBox.Items.Add("MAIN");
+                defaultLabelComboBox.Items.Add("-------------------");
+            }
+
+            // Add other saved templates
+            foreach (string templateName in labelTemplates.Keys)
+            {
+                if (templateName != "MAIN")
+                {
+                    defaultLabelComboBox.Items.Add(templateName);
+                }
+            }
+
             labelSettingsLayout.Controls.Add(defaultLabelComboBox, 1, 0);
 
             labelSettingsGroup.Controls.Add(labelSettingsLayout);
@@ -162,17 +201,29 @@ namespace PrintSystem.Dialogs
         {
             // Load settings from SettingsManager
             var settings = SettingsManager.GetSettings();
-            defaultLabelComboBox.SelectedItem = settings.DefaultLabelType;
             
-            // If the saved label type isn't in the list, select Basic Label
-            if (defaultLabelComboBox.SelectedItem == null)
+            // Only try to select a template if there are items in the combo box
+            if (defaultLabelComboBox.Items.Count > 0)
             {
-                defaultLabelComboBox.SelectedItem = "Basic Label";
+                // Try to select the saved template
+                defaultLabelComboBox.SelectedItem = settings.DefaultLabelType;
+                
+                // If the saved label type isn't in the list, select the first template
+                if (defaultLabelComboBox.SelectedItem == null)
+                {
+                    defaultLabelComboBox.SelectedIndex = 0;
+                }
             }
         }
 
         private void SaveButton_Click(object sender, EventArgs e)
         {
+            if (defaultLabelComboBox.SelectedItem == null)
+            {
+                MessageBox.Show("Please select a default label template.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
             // Save settings to SettingsManager
             var settings = new Settings
             {
@@ -187,7 +238,32 @@ namespace PrintSystem.Dialogs
         {
             using (var labelBuilder = new LabelBuilderDialog())
             {
-                labelBuilder.ShowDialog();
+                if (labelBuilder.ShowDialog() == DialogResult.OK)
+                {
+                    // Reload templates and update combo box
+                    LoadLabelTemplates();
+                    string currentSelection = defaultLabelComboBox.SelectedItem?.ToString();
+                    
+                    defaultLabelComboBox.Items.Clear();
+                    defaultLabelComboBox.Items.AddRange(new object[] {
+                        "Basic Label",
+                        "Product Label",
+                        "Price Label"
+                    });
+
+                    foreach (string templateName in labelTemplates.Keys)
+                    {
+                        defaultLabelComboBox.Items.Add(templateName);
+                    }
+
+                    defaultLabelComboBox.Items.Add("Custom");
+
+                    // Restore previous selection if possible
+                    if (!string.IsNullOrEmpty(currentSelection))
+                    {
+                        defaultLabelComboBox.SelectedItem = currentSelection;
+                    }
+                }
             }
         }
 

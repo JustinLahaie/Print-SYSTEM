@@ -2,12 +2,35 @@ using System;
 using System.Windows.Forms;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Collections.Generic;
 using PrintSystem.Models;
 using PrintSystem.Managers;
+using System.Text.Json;
+using System.IO;
+using ZXing;
+using ZXing.QrCode;
+using ZXing.Windows.Compatibility;
 
 namespace PrintSystem.Dialogs
 {
+    public class LabelTemplate
+    {
+        public string Name { get; set; }
+        public decimal Width { get; set; }
+        public decimal Height { get; set; }
+        public List<LabelElementInfo> Elements { get; set; } = new List<LabelElementInfo>();
+    }
+
+    public class LabelElementInfo
+    {
+        public string Type { get; set; }  // "Text", "QR", "Image"
+        public string Content { get; set; }
+        public Rectangle Bounds { get; set; }
+        public string FontFamily { get; set; }
+        public int FontSize { get; set; }
+    }
+
     public class LabelBuilderDialog : Form
     {
         private Panel designCanvas;
@@ -22,6 +45,7 @@ namespace PrintSystem.Dialogs
         private NumericUpDown labelHeightInput;
         private ComboBox fontSizeComboBox;
         private ComboBox fontFamilyComboBox;
+        private ComboBox qrTemplateComboBox;
 
         // Store the current item if we're designing from an item context
         private Item currentItem;
@@ -31,6 +55,14 @@ namespace PrintSystem.Dialogs
         private LabelElement selectedElement;
         private Point dragStartPoint;
         private bool isDragging;
+
+        // Store QR templates
+        private Dictionary<string, string> qrTemplates = new Dictionary<string, string>();
+        private const string QR_TEMPLATES_FILE = "qr_templates.json";
+
+        // Store label templates
+        private Dictionary<string, LabelTemplate> labelTemplates = new Dictionary<string, LabelTemplate>();
+        private const string LABEL_TEMPLATES_FILE = "label_templates.json";
 
         // Constants for design
         private const int GRID_SIZE = 10;
@@ -42,11 +74,114 @@ namespace PrintSystem.Dialogs
         {
             currentItem = item;
             labelElements = new List<LabelElement>();
+            LoadQRTemplates();
+            LoadLabelTemplates();
             InitializeComponents();
             if (currentItem != null)
             {
                 PopulateFieldsWithItem();
             }
+        }
+
+        private void LoadQRTemplates()
+        {
+            try
+            {
+                if (File.Exists(QR_TEMPLATES_FILE))
+                {
+                    string json = File.ReadAllText(QR_TEMPLATES_FILE);
+                    qrTemplates = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error loading QR templates: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                qrTemplates = new Dictionary<string, string>();
+            }
+        }
+
+        private void LoadLabelTemplates()
+        {
+            try
+            {
+                if (File.Exists(LABEL_TEMPLATES_FILE))
+                {
+                    string json = File.ReadAllText(LABEL_TEMPLATES_FILE);
+                    var templates = JsonSerializer.Deserialize<Dictionary<string, LabelTemplate>>(json);
+                    
+                    // Initialize templates dictionary if null
+                    labelTemplates = templates ?? new Dictionary<string, LabelTemplate>();
+
+                    // Ensure MAIN template exists and has valid values
+                    if (!labelTemplates.ContainsKey("MAIN") || labelTemplates["MAIN"] == null)
+                    {
+                        labelTemplates["MAIN"] = CreateDefaultMainTemplate();
+                        SaveLabelTemplates();
+                    }
+                    else
+                    {
+                        // Validate MAIN template
+                        var mainTemplate = labelTemplates["MAIN"];
+                        if (mainTemplate.Elements == null)
+                        {
+                            mainTemplate.Elements = new List<LabelElementInfo>();
+                        }
+                        if (mainTemplate.Width <= 0)
+                        {
+                            mainTemplate.Width = 100;
+                        }
+                        if (mainTemplate.Height <= 0)
+                        {
+                            mainTemplate.Height = 50;
+                        }
+                    }
+                }
+                else
+                {
+                    // Create new templates dictionary with default MAIN template
+                    labelTemplates = new Dictionary<string, LabelTemplate>
+                    {
+                        ["MAIN"] = CreateDefaultMainTemplate()
+                    };
+                    SaveLabelTemplates();
+                }
+
+                // Update template combo box
+                if (templateComboBox != null)
+                {
+                    templateComboBox.Items.Clear();
+                    templateComboBox.Items.Add("MAIN");
+                    foreach (string templateName in labelTemplates.Keys.Where(k => k != "MAIN"))
+                    {
+                        templateComboBox.Items.Add(templateName);
+                    }
+
+                    // Select MAIN template by default
+                    if (templateComboBox.Items.Count > 0)
+                    {
+                        templateComboBox.SelectedIndex = 0;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error loading label templates: {ex.Message}\nDefault templates will be used.", "Warning", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                labelTemplates = new Dictionary<string, LabelTemplate>
+                {
+                    ["MAIN"] = CreateDefaultMainTemplate()
+                };
+            }
+        }
+
+        private LabelTemplate CreateDefaultMainTemplate()
+        {
+            return new LabelTemplate
+            {
+                Name = "MAIN",
+                Width = 100,
+                Height = 50,
+                Elements = new List<LabelElementInfo>()
+            };
         }
 
         private void InitializeComponents()
@@ -104,30 +239,53 @@ namespace PrintSystem.Dialogs
                 Dock = DockStyle.Fill,
                 DropDownStyle = ComboBoxStyle.DropDownList
             };
-            templateComboBox.Items.AddRange(new object[] {
-                "Basic Label",
-                "Product Label",
-                "Price Label",
-                "Custom"
-            });
-
-            loadTemplateButton = new Button
+            // Remove placeholder templates - only load saved templates
+            foreach (string templateName in labelTemplates.Keys)
             {
-                Text = "Load",
-                Width = 70
-            };
-            loadTemplateButton.Click += LoadTemplateButton_Click;
+                templateComboBox.Items.Add(templateName);
+            }
 
-            saveTemplateButton = new Button
+            // Add template management buttons
+            TableLayoutPanel templateButtonsLayout = new TableLayoutPanel
             {
-                Text = "Save",
-                Width = 70
+                Dock = DockStyle.Fill,
+                RowCount = 2,
+                ColumnCount = 2,
+                Margin = new Padding(0)
             };
-            saveTemplateButton.Click += SaveTemplateButton_Click;
+
+            Button updateMainButton = new Button
+            {
+                Text = "Update MAIN",
+                Width = 85,
+                Height = 25
+            };
+            updateMainButton.Click += UpdateMainButton_Click;
+
+            Button saveAsNewButton = new Button
+            {
+                Text = "Save As New",
+                Width = 85,
+                Height = 25
+            };
+            saveAsNewButton.Click += SaveTemplateButton_Click;
+
+            Button deleteButton = new Button
+            {
+                Text = "Delete",
+                Width = 70,
+                Height = 25
+            };
+            deleteButton.Click += DeleteTemplateButton_Click;
+
+            templateButtonsLayout.Controls.Add(updateMainButton, 0, 0);
+            templateButtonsLayout.Controls.Add(saveAsNewButton, 1, 0);
+            templateButtonsLayout.Controls.Add(deleteButton, 1, 1);
 
             templateLayout.Controls.Add(templateComboBox, 0, 0);
-            templateLayout.Controls.Add(saveTemplateButton, 1, 0);
-            templateLayout.Controls.Add(loadTemplateButton, 1, 1);
+            templateLayout.Controls.Add(templateButtonsLayout, 1, 0);
+            templateLayout.SetRowSpan(templateButtonsLayout, 2);
+
             templateGroup.Controls.Add(templateLayout);
             toolboxLayout.Controls.Add(templateGroup, 0, 0);
 
@@ -236,9 +394,34 @@ namespace PrintSystem.Dialogs
             {
                 Text = "QR Code",
                 Dock = DockStyle.Fill,
-                Height = 60,
+                Height = 100,
                 Padding = new Padding(5)
             };
+
+            TableLayoutPanel qrLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                RowCount = 2,
+                ColumnCount = 1,
+                Padding = new Padding(0)
+            };
+
+            // QR Template dropdown
+            qrTemplateComboBox = new ComboBox
+            {
+                Dock = DockStyle.Fill,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Margin = new Padding(0, 0, 0, 5)
+            };
+            // Only add saved templates
+            foreach (string templateName in qrTemplates.Keys)
+            {
+                qrTemplateComboBox.Items.Add(templateName);
+            }
+            if (qrTemplateComboBox.Items.Count > 0)
+            {
+                qrTemplateComboBox.SelectedIndex = 0;
+            }
 
             generateQRButton = new Button
             {
@@ -246,7 +429,11 @@ namespace PrintSystem.Dialogs
                 Dock = DockStyle.Fill
             };
             generateQRButton.Click += GenerateQRButton_Click;
-            qrGroup.Controls.Add(generateQRButton);
+            qrLayout.Controls.Add(qrTemplateComboBox, 0, 0);
+
+            qrLayout.Controls.Add(generateQRButton, 0, 1);
+
+            qrGroup.Controls.Add(qrLayout);
             toolboxLayout.Controls.Add(qrGroup, 0, 4);
 
             toolbox.Controls.Add(toolboxLayout);
@@ -291,6 +478,22 @@ namespace PrintSystem.Dialogs
                 Height = 40
             };
 
+            // OK Button
+            Button okButton = new Button
+            {
+                Text = "OK",
+                Width = 80,
+                Height = 30,
+                Location = new Point(bottomPanel.Width - 200, 5),
+                Anchor = AnchorStyles.Right
+            };
+            okButton.Click += (s, e) => 
+            {
+                SaveLabelTemplates();
+                this.DialogResult = DialogResult.OK;
+                this.Close();
+            };
+
             printButton = new Button
             {
                 Text = "Print Preview",
@@ -300,6 +503,8 @@ namespace PrintSystem.Dialogs
                 Anchor = AnchorStyles.Right
             };
             printButton.Click += PrintButton_Click;
+
+            bottomPanel.Controls.Add(okButton);
             bottomPanel.Controls.Add(printButton);
             canvasLayout.Controls.Add(bottomPanel, 0, 1);
 
@@ -311,8 +516,11 @@ namespace PrintSystem.Dialogs
 
             this.Controls.Add(mainLayout);
 
-            // Set initial template
-            templateComboBox.SelectedIndex = 0;
+            // Only set initial template if there are items
+            if (templateComboBox.Items.Count > 0)
+            {
+                templateComboBox.SelectedIndex = 0;
+            }
             
             // Initialize canvas size
             UpdateCanvasSize();
@@ -654,33 +862,325 @@ namespace PrintSystem.Dialogs
 
         private void GenerateQRButton_Click(object sender, EventArgs e)
         {
-            using (var qrDialog = new QRBuilderDialog(currentItem))
+            string template = qrTemplateComboBox.SelectedItem?.ToString();
+            if (string.IsNullOrEmpty(template)) return;
+
+            string content;
+            if (qrTemplates.ContainsKey(template))
             {
-                if (qrDialog.ShowDialog() == DialogResult.OK)
+                content = qrTemplates[template];
+                // Replace placeholders with actual values or keep placeholders if no item
+                if (currentItem != null)
                 {
-                    // Get the QR code image and add it as an element
-                    if (qrDialog.QRImage != null)
-                    {
-                        Point location = new Point(GRID_SIZE, GRID_SIZE);
-                        var qrElement = new QRElement(qrDialog.QRImage, location);
-                        labelElements.Add(qrElement);
-                        selectedElement = qrElement;
-                        designCanvas.Invalidate();
-                    }
+                    content = content.Replace("{ModelNumber}", currentItem.ModelNumber ?? "")
+                                   .Replace("{Description}", currentItem.Description ?? "")
+                                   .Replace("{Supplier}", currentItem.Supplier ?? "")
+                                   .Replace("{Category}", currentItem.CategoryPath ?? "Uncategorized")
+                                   .Replace("{DefaultOrderQuantity}", currentItem.DefaultOrderQuantity.ToString())
+                                   .Replace("{ProductURL}", currentItem.ProductUrl ?? "");
                 }
+                // If no item, keep the placeholders to show template structure
+            }
+            else
+            {
+                // Handle built-in templates
+                switch (template)
+                {
+                    case "Basic Info":
+                        content = currentItem != null
+                            ? $"Model: {currentItem.ModelNumber ?? ""} | Description: {currentItem.Description ?? ""}"
+                            : "Model: {ModelNumber} | Description: {Description}";
+                        break;
+
+                    case "Full Details":
+                        content = currentItem != null
+                            ? $"Model: {currentItem.ModelNumber ?? ""}"
+                              + $" | Description: {currentItem.Description ?? ""}"
+                              + $" | Supplier: {currentItem.Supplier ?? ""}"
+                              + $" | Category: {currentItem.CategoryPath ?? "Uncategorized"}"
+                              + $" | Order Qty: {currentItem.DefaultOrderQuantity}"
+                              + $" | URL: {currentItem.ProductUrl ?? ""}"
+                            : "Model: {ModelNumber}"
+                              + " | Description: {Description}"
+                              + " | Supplier: {Supplier}"
+                              + " | Category: {Category}"
+                              + " | Order Qty: {DefaultOrderQuantity}"
+                              + " | URL: {ProductURL}";
+                        break;
+
+                    case "URL Only":
+                        content = currentItem?.ProductUrl ?? "{ProductURL}";
+                        break;
+
+                    default:
+                        MessageBox.Show("Please select a valid template.", "Invalid Template", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                }
+            }
+
+            // Ensure content is not empty
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                MessageBox.Show("Cannot generate QR code with empty content.", "Invalid Content", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            // Generate QR code
+            try
+            {
+                var writer = new BarcodeWriter<Bitmap>
+                {
+                    Format = BarcodeFormat.QR_CODE,
+                    Options = new QrCodeEncodingOptions
+                    {
+                        Width = 300,  // Medium size
+                        Height = 300,
+                        Margin = 1,
+                        ErrorCorrection = ZXing.QrCode.Internal.ErrorCorrectionLevel.M
+                    },
+                    Renderer = new BitmapRenderer()
+                };
+
+                Image qrImage = writer.Write(content);
+                Point location = new Point(GRID_SIZE, GRID_SIZE);
+                var qrElement = new QRElement(qrImage, location);
+                labelElements.Add(qrElement);
+                selectedElement = qrElement;
+                designCanvas.Invalidate();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error generating QR code: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
         private void LoadTemplateButton_Click(object sender, EventArgs e)
         {
-            // TODO: Implement template loading
-            MessageBox.Show("Template loading will be implemented in a future update.", "Coming Soon");
+            string templateName = templateComboBox.SelectedItem?.ToString();
+            if (string.IsNullOrEmpty(templateName))
+            {
+                MessageBox.Show("Please select a template to load.", "No Template Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (!labelTemplates.ContainsKey(templateName))
+            {
+                MessageBox.Show($"Template '{templateName}' not found.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            try
+            {
+                var template = labelTemplates[templateName];
+
+                // Clear existing elements
+                foreach (var element in labelElements)
+                {
+                    element.Dispose();
+                }
+                labelElements.Clear();
+
+                // Set dimensions
+                labelWidthInput.Value = template.Width;
+                labelHeightInput.Value = template.Height;
+
+                // Load elements
+                foreach (var elementInfo in template.Elements)
+                {
+                    LabelElement element = null;
+                    switch (elementInfo.Type)
+                    {
+                        case "Text":
+                            element = new TextElement(elementInfo.Content, 
+                                new Point(elementInfo.Bounds.X, elementInfo.Bounds.Y),
+                                elementInfo.FontFamily,
+                                elementInfo.FontSize);
+                            break;
+
+                        case "QR":
+                            try
+                            {
+                                var writer = new BarcodeWriter<Bitmap>
+                                {
+                                    Format = BarcodeFormat.QR_CODE,
+                                    Options = new QrCodeEncodingOptions
+                                    {
+                                        Width = 300,
+                                        Height = 300,
+                                        Margin = 1,
+                                        ErrorCorrection = ZXing.QrCode.Internal.ErrorCorrectionLevel.M
+                                    },
+                                    Renderer = new BitmapRenderer()
+                                };
+
+                                string qrContent = elementInfo.Content;
+                                if (currentItem != null)
+                                {
+                                    qrContent = qrContent.Replace("{ModelNumber}", currentItem.ModelNumber ?? "")
+                                                       .Replace("{Description}", currentItem.Description ?? "")
+                                                       .Replace("{Supplier}", currentItem.Supplier ?? "")
+                                                       .Replace("{Category}", currentItem.CategoryPath ?? "Uncategorized")
+                                                       .Replace("{DefaultOrderQuantity}", currentItem.DefaultOrderQuantity.ToString())
+                                                       .Replace("{ProductURL}", currentItem.ProductUrl ?? "");
+                                }
+
+                                Image qrImage = writer.Write(qrContent);
+                                element = new QRElement(qrImage, new Point(elementInfo.Bounds.X, elementInfo.Bounds.Y));
+                            }
+                            catch (Exception ex)
+                            {
+                                MessageBox.Show($"Error regenerating QR code: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                continue;
+                            }
+                            break;
+
+                        case "Image":
+                            if (File.Exists(elementInfo.Content))
+                            {
+                                element = new ImageElement(elementInfo.Content, new Point(elementInfo.Bounds.X, elementInfo.Bounds.Y));
+                            }
+                            else
+                            {
+                                MessageBox.Show($"Image file not found: {elementInfo.Content}", "Warning", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                                continue;
+                            }
+                            break;
+                    }
+
+                    if (element != null)
+                    {
+                        element.Bounds = elementInfo.Bounds;
+                        labelElements.Add(element);
+                    }
+                }
+
+                designCanvas.Invalidate();
+                MessageBox.Show("Template loaded successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error loading template: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void SaveTemplateButton_Click(object sender, EventArgs e)
         {
-            // TODO: Implement template saving
-            MessageBox.Show("Template saving will be implemented in a future update.", "Coming Soon");
+            if (labelElements.Count == 0)
+            {
+                MessageBox.Show("Please add some elements to the label before saving the template.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            string templateName = Microsoft.VisualBasic.Interaction.InputBox("Enter template name:", "Save Template", "");
+            if (string.IsNullOrWhiteSpace(templateName))
+                return;
+
+            if (templateName.Equals("MAIN", StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show("Cannot save as 'MAIN'. Use 'Update MAIN' button instead.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            if (labelTemplates.ContainsKey(templateName))
+            {
+                if (MessageBox.Show($"Template '{templateName}' already exists. Do you want to overwrite it?",
+                    "Confirm Overwrite", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                    return;
+            }
+
+            // Create template
+            var template = new LabelTemplate
+            {
+                Name = templateName,
+                Width = labelWidthInput.Value,
+                Height = labelHeightInput.Value,
+                Elements = new List<LabelElementInfo>()
+            };
+
+            // Save elements
+            foreach (var element in labelElements)
+            {
+                var elementInfo = new LabelElementInfo
+                {
+                    Bounds = element.Bounds
+                };
+
+                if (element is TextElement textElement)
+                {
+                    elementInfo.Type = "Text";
+                    elementInfo.Content = textElement.GetText();
+                    elementInfo.FontFamily = textElement.GetFontFamily();
+                    elementInfo.FontSize = textElement.GetFontSize();
+                }
+                else if (element is QRElement)
+                {
+                    elementInfo.Type = "QR";
+                    elementInfo.Content = qrTemplateComboBox.SelectedItem?.ToString() ?? "Basic Info";
+                }
+                else if (element is ImageElement imageElement)
+                {
+                    elementInfo.Type = "Image";
+                    elementInfo.Content = imageElement.GetImagePath();
+                }
+
+                template.Elements.Add(elementInfo);
+            }
+
+            // Save template
+            labelTemplates[templateName] = template;
+            SaveLabelTemplates();
+
+            // Add to combo box if not exists
+            if (!templateComboBox.Items.Contains(templateName))
+            {
+                templateComboBox.Items.Add(templateName);
+            }
+
+            templateComboBox.SelectedItem = templateName;
+            MessageBox.Show("Template saved successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void SaveLabelTemplates()
+        {
+            try
+            {
+                // Ensure we have valid templates before saving
+                if (labelTemplates == null)
+                {
+                    labelTemplates = new Dictionary<string, LabelTemplate>
+                    {
+                        ["MAIN"] = CreateDefaultMainTemplate()
+                    };
+                }
+
+                // Validate all templates before saving
+                foreach (var template in labelTemplates.Values)
+                {
+                    if (template.Elements == null)
+                    {
+                        template.Elements = new List<LabelElementInfo>();
+                    }
+                    if (template.Width <= 0)
+                    {
+                        template.Width = 100;
+                    }
+                    if (template.Height <= 0)
+                    {
+                        template.Height = 50;
+                    }
+                }
+
+                string json = JsonSerializer.Serialize(labelTemplates, new JsonSerializerOptions 
+                { 
+                    WriteIndented = true,
+                    DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+                });
+                File.WriteAllText(LABEL_TEMPLATES_FILE, json);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error saving label templates: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void PrintButton_Click(object sender, EventArgs e)
@@ -696,6 +1196,90 @@ namespace PrintSystem.Dialogs
             {
                 element.Dispose();
             }
+            SaveLabelTemplates();
+        }
+
+        private void UpdateMainButton_Click(object sender, EventArgs e)
+        {
+            if (MessageBox.Show("Are you sure you want to update the MAIN template? This will overwrite the existing MAIN template.",
+                "Confirm Update", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            {
+                return;
+            }
+
+            // Create template
+            var template = new LabelTemplate
+            {
+                Name = "MAIN",
+                Width = labelWidthInput.Value,
+                Height = labelHeightInput.Value,
+                Elements = new List<LabelElementInfo>()
+            };
+
+            // Save elements
+            foreach (var element in labelElements)
+            {
+                var elementInfo = new LabelElementInfo
+                {
+                    Bounds = element.Bounds
+                };
+
+                if (element is TextElement textElement)
+                {
+                    elementInfo.Type = "Text";
+                    elementInfo.Content = textElement.GetText();
+                    elementInfo.FontFamily = textElement.GetFontFamily();
+                    elementInfo.FontSize = textElement.GetFontSize();
+                }
+                else if (element is QRElement)
+                {
+                    elementInfo.Type = "QR";
+                    elementInfo.Content = qrTemplateComboBox.SelectedItem?.ToString() ?? "Basic Info";
+                }
+                else if (element is ImageElement imageElement)
+                {
+                    elementInfo.Type = "Image";
+                    elementInfo.Content = imageElement.GetImagePath();
+                }
+
+                template.Elements.Add(elementInfo);
+            }
+
+            // Save template
+            labelTemplates["MAIN"] = template;
+            SaveLabelTemplates();
+
+            // Add to combo box if not exists
+            if (!templateComboBox.Items.Contains("MAIN"))
+            {
+                templateComboBox.Items.Insert(0, "MAIN");
+            }
+
+            MessageBox.Show("MAIN template updated successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            this.DialogResult = DialogResult.OK;
+        }
+
+        private void DeleteTemplateButton_Click(object sender, EventArgs e)
+        {
+            string templateName = templateComboBox.SelectedItem?.ToString();
+            if (string.IsNullOrEmpty(templateName))
+                return;
+
+            if (templateName.Equals("MAIN", StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show("Cannot delete the MAIN template.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            if (MessageBox.Show($"Are you sure you want to delete the template '{templateName}'?",
+                "Confirm Delete", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            {
+                labelTemplates.Remove(templateName);
+                SaveLabelTemplates();
+                templateComboBox.Items.Remove(templateName);
+                templateComboBox.SelectedIndex = 0;
+                MessageBox.Show("Template deleted successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
         }
     }
 
@@ -707,7 +1291,11 @@ namespace PrintSystem.Dialogs
         protected bool isResizing;
         protected int resizeHandle = -1;
         
-        public Rectangle Bounds => bounds;
+        public Rectangle Bounds 
+        { 
+            get => bounds;
+            set => bounds = value;
+        }
         public bool IsResizing => isResizing;
 
         public abstract void Draw(Graphics g);
@@ -810,6 +1398,10 @@ namespace PrintSystem.Dialogs
             UpdateSize();
         }
 
+        public string GetText() => text;
+        public string GetFontFamily() => font.FontFamily.Name;
+        public int GetFontSize() => (int)font.Size;
+
         private void UpdateSize()
         {
             if (autoSize)
@@ -858,13 +1450,17 @@ namespace PrintSystem.Dialogs
     {
         private Image image;
         private bool maintainAspectRatio = true;
+        private string imagePath;
 
         public ImageElement(string imagePath, Point location)
         {
+            this.imagePath = imagePath;
             image = Image.FromFile(imagePath);
             float ratio = (float)image.Width / image.Height;
             bounds = new Rectangle(location, new Size((int)(100 * ratio), 100));
         }
+
+        public string GetImagePath() => imagePath;
 
         public override void Draw(Graphics g)
         {
@@ -898,12 +1494,23 @@ namespace PrintSystem.Dialogs
         }
     }
 
-    public class QRElement : ImageElement
+    public class QRElement : LabelElement
     {
-        public QRElement(Image qrImage, Point location) : base(null, location)
+        private Image qrImage;
+
+        public QRElement(Image qrImage, Point location)
         {
+            this.qrImage = qrImage;
             // QR codes should be square
             bounds = new Rectangle(location, new Size(100, 100));
+        }
+
+        public override void Draw(Graphics g)
+        {
+            if (qrImage != null)
+            {
+                g.DrawImage(qrImage, bounds);
+            }
         }
 
         public override void Resize(Point mouseLocation)
@@ -911,6 +1518,11 @@ namespace PrintSystem.Dialogs
             base.Resize(mouseLocation);
             // Keep QR code square
             bounds.Height = bounds.Width;
+        }
+
+        public override void Dispose()
+        {
+            qrImage?.Dispose();
         }
     }
 } 

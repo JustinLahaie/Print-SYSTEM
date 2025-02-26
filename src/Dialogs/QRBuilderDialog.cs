@@ -58,12 +58,31 @@ namespace PrintSystem.Dialogs
                 {
                     string json = File.ReadAllText(TEMPLATES_FILE);
                     savedTemplates = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                    
+                    // Ensure MAIN template exists
+                    if (!savedTemplates.ContainsKey("MAIN"))
+                    {
+                        savedTemplates["MAIN"] = "Model: {ModelNumber} | Supplier: {Supplier} | Qty: {DefaultOrderQuantity} | URL: {ProductURL}";
+                        SaveTemplates();
+                    }
+                }
+                else
+                {
+                    // Create default templates
+                    savedTemplates = new Dictionary<string, string>
+                    {
+                        ["MAIN"] = "Model: {ModelNumber} | Supplier: {Supplier} | Qty: {DefaultOrderQuantity} | URL: {ProductURL}"
+                    };
+                    SaveTemplates();
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error loading templates: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                savedTemplates = new Dictionary<string, string>();
+                MessageBox.Show($"Error loading QR templates: {ex.Message}\nDefault templates will be used.", "Warning", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                savedTemplates = new Dictionary<string, string>
+                {
+                    ["MAIN"] = "Model: {ModelNumber} | Supplier: {Supplier} | Qty: {DefaultOrderQuantity} | URL: {ProductURL}"
+                };
             }
         }
 
@@ -76,7 +95,7 @@ namespace PrintSystem.Dialogs
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error saving templates: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"Error saving QR templates: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -139,28 +158,72 @@ namespace PrintSystem.Dialogs
                 Dock = DockStyle.Fill,
                 DropDownStyle = ComboBoxStyle.DropDownList
             };
+
+            // Add MAIN template first if it exists
+            if (savedTemplates.ContainsKey("MAIN"))
+            {
+                templateComboBox.Items.Add("MAIN");
+                templateComboBox.Items.Add("-------------------");
+            }
+
+            // Add built-in templates
             templateComboBox.Items.AddRange(new object[] {
                 "Basic Info",
                 "Full Details",
                 "URL Only",
                 "Custom"
             });
-            // Add saved templates
+
+            // Add other saved templates
             foreach (string templateName in savedTemplates.Keys)
             {
-                templateComboBox.Items.Add(templateName);
+                if (templateName != "MAIN")
+                {
+                    templateComboBox.Items.Add(templateName);
+                }
             }
             templateComboBox.SelectedIndexChanged += TemplateComboBox_SelectedIndexChanged;
 
-            saveTemplateButton = new Button
+            // Template management buttons
+            TableLayoutPanel templateButtonsLayout = new TableLayoutPanel
             {
-                Text = "Save as Template",
-                Width = 120
+                Dock = DockStyle.Fill,
+                RowCount = 2,
+                ColumnCount = 2,
+                Margin = new Padding(0)
             };
-            saveTemplateButton.Click += SaveTemplateButton_Click;
+
+            Button updateMainButton = new Button
+            {
+                Text = "Update MAIN",
+                Width = 85,
+                Height = 25
+            };
+            updateMainButton.Click += UpdateMainButton_Click;
+
+            Button saveAsNewButton = new Button
+            {
+                Text = "Save As New",
+                Width = 85,
+                Height = 25
+            };
+            saveAsNewButton.Click += SaveTemplateButton_Click;
+
+            Button deleteButton = new Button
+            {
+                Text = "Delete",
+                Width = 70,
+                Height = 25
+            };
+            deleteButton.Click += DeleteTemplateButton_Click;
+
+            templateButtonsLayout.Controls.Add(updateMainButton, 0, 0);
+            templateButtonsLayout.Controls.Add(saveAsNewButton, 1, 0);
+            templateButtonsLayout.Controls.Add(deleteButton, 1, 1);
 
             templateLayout.Controls.Add(templateComboBox, 0, 0);
-            templateLayout.Controls.Add(saveTemplateButton, 1, 0);
+            templateLayout.Controls.Add(templateButtonsLayout, 1, 0);
+            templateLayout.SetRowSpan(templateButtonsLayout, 2);
             templateGroup.Controls.Add(templateLayout);
             controlsLayout.Controls.Add(templateGroup, 0, 0);
 
@@ -560,12 +623,19 @@ namespace PrintSystem.Dialogs
                 string content = contentTextBox.Text;
                 if (currentItem != null)
                 {
-                    content = content.Replace("{ModelNumber}", currentItem.ModelNumber)
-                                   .Replace("{Description}", currentItem.Description)
-                                   .Replace("{Supplier}", currentItem.Supplier)
+                    content = content.Replace("{ModelNumber}", currentItem.ModelNumber ?? "")
+                                   .Replace("{Description}", currentItem.Description ?? "")
+                                   .Replace("{Supplier}", currentItem.Supplier ?? "")
                                    .Replace("{Category}", currentItem.CategoryPath ?? "Uncategorized")
                                    .Replace("{DefaultOrderQuantity}", currentItem.DefaultOrderQuantity.ToString())
                                    .Replace("{ProductURL}", currentItem.ProductUrl ?? "");
+                }
+
+                // Check if content is empty after placeholder replacement
+                if (string.IsNullOrWhiteSpace(content))
+                {
+                    MessageBox.Show("QR code content is empty after replacing placeholders. Please check your template.", "Warning", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
                 }
 
                 var writer = new BarcodeWriter
@@ -591,6 +661,7 @@ namespace PrintSystem.Dialogs
             catch (Exception ex)
             {
                 previewLabel.Text = $"Error: {ex.Message}";
+                MessageBox.Show($"Error generating QR code: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -647,42 +718,37 @@ namespace PrintSystem.Dialogs
         {
             if (string.IsNullOrWhiteSpace(contentTextBox.Text))
             {
-                MessageBox.Show("Please enter content for the template.", "No Content", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("Please enter template content first.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
-            using (var dialog = new TextInputDialog("Save Template", "Enter template name:"))
+            string templateName = Microsoft.VisualBasic.Interaction.InputBox("Enter template name:", "Save Template", "");
+            if (string.IsNullOrWhiteSpace(templateName))
+                return;
+
+            if (templateName.Equals("MAIN", StringComparison.OrdinalIgnoreCase))
             {
-                if (dialog.ShowDialog() == DialogResult.OK)
-                {
-                    string templateName = dialog.InputText;
-                    if (string.IsNullOrWhiteSpace(templateName))
-                    {
-                        MessageBox.Show("Please enter a valid template name.", "Invalid Name", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        return;
-                    }
-
-                    // Ask for confirmation if template exists
-                    if (templateComboBox.Items.Contains(templateName))
-                    {
-                        if (MessageBox.Show($"Template '{templateName}' already exists. Do you want to replace it?",
-                            "Confirm Replace", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-                        {
-                            return;
-                        }
-                    }
-                    else
-                    {
-                        templateComboBox.Items.Add(templateName);
-                    }
-
-                    // Save the template
-                    savedTemplates[templateName] = contentTextBox.Text;
-                    SaveTemplates();
-                    
-                    MessageBox.Show("Template saved successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
+                MessageBox.Show("Cannot save as 'MAIN'. Use 'Update MAIN' button instead.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
             }
+
+            if (savedTemplates.ContainsKey(templateName))
+            {
+                if (MessageBox.Show($"Template '{templateName}' already exists. Do you want to overwrite it?",
+                    "Confirm Overwrite", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                    return;
+            }
+
+            savedTemplates[templateName] = contentTextBox.Text;
+            SaveTemplates();
+
+            if (!templateComboBox.Items.Contains(templateName))
+            {
+                templateComboBox.Items.Add(templateName);
+            }
+
+            templateComboBox.SelectedItem = templateName;
+            MessageBox.Show("Template saved successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void PrintButton_Click(object sender, EventArgs e)
@@ -745,6 +811,55 @@ namespace PrintSystem.Dialogs
                 qrPreview.Image.Dispose();
             }
             SaveTemplates(); // Save templates when closing
+        }
+
+        private void UpdateMainButton_Click(object sender, EventArgs e)
+        {
+            if (MessageBox.Show("Are you sure you want to update the MAIN template? This will overwrite the existing MAIN template.",
+                "Confirm Update", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            {
+                return;
+            }
+
+            // Save the current content as MAIN template
+            savedTemplates["MAIN"] = contentTextBox.Text;
+            SaveTemplates();
+
+            // Add to combo box if not exists
+            if (!templateComboBox.Items.Contains("MAIN"))
+            {
+                templateComboBox.Items.Insert(0, "MAIN");
+                if (templateComboBox.Items.Count == 1 || !templateComboBox.Items.Contains("-------------------"))
+                {
+                    templateComboBox.Items.Insert(1, "-------------------");
+                }
+            }
+
+            MessageBox.Show("MAIN template updated successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            this.DialogResult = DialogResult.OK;
+        }
+
+        private void DeleteTemplateButton_Click(object sender, EventArgs e)
+        {
+            string templateName = templateComboBox.SelectedItem?.ToString();
+            if (string.IsNullOrEmpty(templateName))
+                return;
+
+            if (templateName.Equals("MAIN", StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show("Cannot delete the MAIN template.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            if (MessageBox.Show($"Are you sure you want to delete the template '{templateName}'?",
+                "Confirm Delete", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            {
+                savedTemplates.Remove(templateName);
+                SaveTemplates();
+                templateComboBox.Items.Remove(templateName);
+                templateComboBox.SelectedIndex = 0;
+                MessageBox.Show("Template deleted successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
         }
     }
 
