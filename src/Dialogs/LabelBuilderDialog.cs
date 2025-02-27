@@ -1709,8 +1709,15 @@ namespace PrintSystem.Dialogs
                         }
                         else if (element is ImageElement imageElement)
                         {
-                            // Use the image path from the ImageElement
+                            // Check if we should use the sample item's image instead of the placeholder
                             string imagePath = imageElement.GetImagePath();
+                            
+                            // If we have a sample item with an image, use that instead of the placeholder
+                            if (sampleItem != null && !string.IsNullOrEmpty(sampleItem.ImagePath) && File.Exists(sampleItem.ImagePath))
+                            {
+                                imagePath = sampleItem.ImagePath;
+                            }
+                            
                             if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
                             {
                                 try
