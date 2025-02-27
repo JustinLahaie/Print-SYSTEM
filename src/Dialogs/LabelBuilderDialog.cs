@@ -1569,16 +1569,22 @@ namespace PrintSystem.Dialogs
 
         private void PrintButton_Click(object sender, EventArgs e)
         {
-            // Get any item to use as a sample
-            var items = ItemManager.GetItems();
-            if (!items.Any())
+            // Use the current item if available, otherwise get a sample item
+            var sampleItem = currentItem;
+            
+            // If no current item, try to get a sample item
+            if (sampleItem == null)
             {
-                MessageBox.Show("Please add at least one item to show a print preview.", "No Items", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
+                var items = ItemManager.GetItems();
+                if (!items.Any())
+                {
+                    MessageBox.Show("Please add at least one item to show a print preview.", "No Items", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                
+                // Use the first item as a sample
+                sampleItem = items.First();
             }
-
-            // Use the first item as a sample
-            var sampleItem = items.First();
             
             // Debug sample item information
             SaveDebugInfo($"Print preview sample item: ID={sampleItem.Id}, Model={sampleItem.ModelNumber}, Supplier={sampleItem.Supplier}");

@@ -740,142 +740,21 @@ namespace PrintSystem.Forms
         
         private void ShowLabelPreview(Item item, string templateName)
         {
-            // Check if the label templates are loaded
+            // Create a label builder dialog with the item
             var labelBuilderDialog = new LabelBuilderDialog(item);
             
-            // Access the label templates from the dialog
-            var templateMethod = labelBuilderDialog.GetType().GetMethod("LoadLabelTemplates", 
+            // Call the print preview method directly
+            var printButtonClickMethod = labelBuilderDialog.GetType().GetMethod("PrintButton_Click", 
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            templateMethod?.Invoke(labelBuilderDialog, null);
             
-            // Create a preview form
-            using (var previewForm = new Form())
+            if (printButtonClickMethod != null)
             {
-                previewForm.Text = "Label Print Preview";
-                previewForm.Size = new Size(800, 600);
-                previewForm.StartPosition = FormStartPosition.CenterParent;
-                previewForm.MinimizeBox = false;
-                previewForm.MaximizeBox = false;
-                previewForm.FormBorderStyle = FormBorderStyle.FixedDialog;
-
-                // Create preview panel
-                Panel previewPanel = new Panel
-                {
-                    Dock = DockStyle.Fill,
-                    BackColor = Color.LightGray,
-                    AutoScroll = true
-                };
-                
-                // Get the template from the dialog
-                var templatesField = labelBuilderDialog.GetType().GetField("labelTemplates", 
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                
-                if (templatesField != null)
-                {
-                    var templates = templatesField.GetValue(labelBuilderDialog);
-                    
-                    // Check if the template exists using reflection
-                    var containsKeyMethod = templates.GetType().GetMethod("ContainsKey");
-                    var indexerProperty = templates.GetType().GetProperty("Item");
-                    
-                    if (containsKeyMethod != null && 
-                        indexerProperty != null && 
-                        (bool)containsKeyMethod.Invoke(templates, new object[] { templateName }))
-                    {
-                        var template = indexerProperty.GetValue(templates, new object[] { templateName });
-                        
-                        // Use reflection to get template properties
-                        var widthProperty = template.GetType().GetProperty("Width");
-                        var heightProperty = template.GetType().GetProperty("Height");
-                        var elementsProperty = template.GetType().GetProperty("Elements");
-                        
-                        decimal width = Convert.ToDecimal(widthProperty?.GetValue(template) ?? 100m);
-                        decimal height = Convert.ToDecimal(heightProperty?.GetValue(template) ?? 50m);
-                        var elements = elementsProperty?.GetValue(template) as System.Collections.IEnumerable;
-
-                        // Create a white panel to represent the paper
-                        Panel paperPanel = new Panel
-                        {
-                            BackColor = Color.White,
-                            Location = new Point(20, 20),
-                            Size = new Size(
-                                (int)(width * 4.0m), // 4 pixels per mm
-                                (int)(height * 4.0m)
-                            ),
-                            Margin = new Padding(0)
-                        };
-                        
-                        // Add paint handler for the paper panel
-                        paperPanel.Paint += (s, pe) =>
-                        {
-                            // Call method to render label with the item
-                            RenderLabelPreview(pe.Graphics, paperPanel, item, elements);
-                        };
-                        
-                        // Add paper panel to preview panel
-                        previewPanel.Controls.Add(paperPanel);
-                    }
-                    else
-                    {
-                        // Show a message if the template doesn't exist
-                        Label noTemplateLabel = new Label
-                        {
-                            Text = $"Template '{templateName}' not found. Please check settings.",
-                            Dock = DockStyle.Fill,
-                            TextAlign = ContentAlignment.MiddleCenter,
-                            Font = new Font(Font.FontFamily, 12)
-                        };
-                        previewPanel.Controls.Add(noTemplateLabel);
-                    }
-                }
-                else
-                {
-                    // Show a message if we couldn't access templates
-                    Label errorLabel = new Label
-                    {
-                        Text = "Could not access label templates. Please check settings.",
-                        Dock = DockStyle.Fill,
-                        TextAlign = ContentAlignment.MiddleCenter,
-                        Font = new Font(Font.FontFamily, 12)
-                    };
-                    previewPanel.Controls.Add(errorLabel);
-                }
-
-                // Add print button
-                Button printButton = new Button
-                {
-                    Text = "Print",
-                    Dock = DockStyle.Bottom,
-                    Height = 40
-                };
-                printButton.Click += (s, pe) =>
-                {
-                    using (var printDialog = new PrintDialog())
-                    {
-                        if (printDialog.ShowDialog() == DialogResult.OK)
-                        {
-                            // Will be implemented in future update
-                            MessageBox.Show("Printing will be implemented in a future update.", "Coming Soon");
-                        }
-                    }
-                };
-
-                // Add close button
-                Button closeButton = new Button
-                {
-                    Text = "Close",
-                    Dock = DockStyle.Bottom,
-                    Height = 40
-                };
-                closeButton.Click += (s, pe) => previewForm.Close();
-
-                // Add controls to the preview form
-                previewForm.Controls.Add(previewPanel);
-                previewForm.Controls.Add(printButton);
-                previewForm.Controls.Add(closeButton);
-
-                // Show the preview
-                previewForm.ShowDialog();
+                // Invoke the print preview with empty EventArgs
+                printButtonClickMethod.Invoke(labelBuilderDialog, new object[] { null, EventArgs.Empty });
+            }
+            else
+            {
+                MessageBox.Show("Could not generate label preview.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             
             // Clean up the dialog
