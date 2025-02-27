@@ -1076,9 +1076,49 @@ namespace PrintSystem.Dialogs
         {
             LabelElement element;
             
-            if (fieldName == "Image" && currentItem?.ImagePath != null)
+            if (fieldName == "Image")
             {
-                element = new ImageElement(currentItem.ImagePath, location);
+                try {
+                    string imagePath = null;
+                    
+                    // If we have a current item with an image, use that
+                    if (currentItem != null && !string.IsNullOrEmpty(currentItem.ImagePath) && File.Exists(currentItem.ImagePath))
+                    {
+                        imagePath = currentItem.ImagePath;
+                    }
+                    
+                    // Check if we have a valid image path
+                    if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
+                    {
+                        element = new ImageElement(imagePath, location);
+                    }
+                    else
+                    {
+                        // Create and use a placeholder image
+                        string placeholderPath = Path.Combine(Application.StartupPath, "placeholder.png");
+                        if (!File.Exists(placeholderPath))
+                        {
+                            // Create a simple placeholder image if it doesn't exist
+                            using (var placeholderImage = new Bitmap(100, 100))
+                            using (var g = Graphics.FromImage(placeholderImage))
+                            {
+                                g.Clear(Color.White);
+                                g.DrawRectangle(Pens.Gray, 0, 0, 99, 99);
+                                g.DrawString("Image", new Font("Arial", 12), Brushes.Gray, 
+                                    new Rectangle(0, 0, 100, 100), 
+                                    new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center });
+                                
+                                placeholderImage.Save(placeholderPath, ImageFormat.Png);
+                            }
+                        }
+                        element = new ImageElement(placeholderPath, location);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error creating image element: {ex.Message}");
+                    return; // Exit the method instead of using continue
+                }
             }
             else
             {
@@ -1559,19 +1599,19 @@ namespace PrintSystem.Dialogs
                     // Draw all elements with actual item data
                     foreach (var element in labelElements)
                     {
-                        // Create adjusted bounds without margin offset
+                        // Create adjusted bounds to correctly position elements within the preview
+                        // The element.Bounds already includes the MARGIN for design purposes,
+                        // but since the paperPanel doesn't have the margins, we need to adjust
                         var adjustedBounds = new Rectangle(
                             element.Bounds.X - MARGIN,
                             element.Bounds.Y - MARGIN,
                             element.Bounds.Width,
                             element.Bounds.Height
                         );
-
-                        // Ensure bounds are within the label area
+                        
+                        // Ensure no negative coordinates that would push elements out of view
                         if (adjustedBounds.X < 0) adjustedBounds.X = 0;
                         if (adjustedBounds.Y < 0) adjustedBounds.Y = 0;
-                        if (adjustedBounds.Right > paperPanel.Width) adjustedBounds.Width = paperPanel.Width - adjustedBounds.X;
-                        if (adjustedBounds.Bottom > paperPanel.Height) adjustedBounds.Height = paperPanel.Height - adjustedBounds.Y;
 
                         if (element is TextElement textElement)
                         {
@@ -1966,13 +2006,48 @@ namespace PrintSystem.Dialogs
                                 break;
 
                             case "Image":
-                                if (File.Exists(elementInfo.Content))
-                                {
-                                    element = new ImageElement(elementInfo.Content, new Point(elementInfo.Bounds.X, elementInfo.Bounds.Y));
+                                try {
+                                    string imagePath = elementInfo.Content;
+                                    
+                                    // If we have a current item with an image, use that instead
+                                    if (currentItem != null && !string.IsNullOrEmpty(currentItem.ImagePath) && File.Exists(currentItem.ImagePath))
+                                    {
+                                        imagePath = currentItem.ImagePath;
+                                    }
+                                    
+                                    // Check if the image exists
+                                    if (File.Exists(imagePath))
+                                    {
+                                        element = new ImageElement(imagePath, new Point(elementInfo.Bounds.X, elementInfo.Bounds.Y));
+                                    }
+                                    else
+                                    {
+                                        // Create and use a placeholder image if the original is not found
+                                        string placeholderPath = Path.Combine(Application.StartupPath, "placeholder.png");
+                                        if (!File.Exists(placeholderPath))
+                                        {
+                                            // Create a simple placeholder image if it doesn't exist
+                                            using (var placeholderImage = new Bitmap(100, 100))
+                                            using (var g = Graphics.FromImage(placeholderImage))
+                                            {
+                                                g.Clear(Color.White);
+                                                g.DrawRectangle(Pens.Gray, 0, 0, 99, 99);
+                                                g.DrawString("Image", new Font("Arial", 12), Brushes.Gray, 
+                                                    new Rectangle(0, 0, 100, 100), 
+                                                    new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center });
+                                                
+                                                placeholderImage.Save(placeholderPath, ImageFormat.Png);
+                                            }
+                                        }
+                                        element = new ImageElement(placeholderPath, new Point(elementInfo.Bounds.X, elementInfo.Bounds.Y));
+                                        
+                                        // Just log a warning rather than skipping this element
+                                        Console.WriteLine($"Image file not found: {elementInfo.Content}, using placeholder instead");
+                                    }
                                 }
-                                else
+                                catch (Exception ex)
                                 {
-                                    Console.WriteLine($"Image file not found: {elementInfo.Content}");
+                                    Console.WriteLine($"Error creating image element: {ex.Message}");
                                     continue;
                                 }
                                 break;
