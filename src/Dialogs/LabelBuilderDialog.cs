@@ -1104,12 +1104,14 @@ namespace PrintSystem.Dialogs
                     if (currentItem != null && !string.IsNullOrEmpty(currentItem.ImagePath) && File.Exists(currentItem.ImagePath))
                     {
                         imagePath = currentItem.ImagePath;
+                        SaveDebugInfo($"Using current item image: {imagePath}");
                     }
                     
                     // Check if we have a valid image path
                     if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
                     {
                         element = new ImageElement(imagePath, location);
+                        SaveDebugInfo($"Created image element with path: {imagePath}");
                     }
                     else
                     {
@@ -1128,14 +1130,16 @@ namespace PrintSystem.Dialogs
                                     new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center });
                                 
                                 placeholderImage.Save(placeholderPath, ImageFormat.Png);
+                                SaveDebugInfo($"Created placeholder image at: {placeholderPath}");
                             }
                         }
                         element = new ImageElement(placeholderPath, location);
+                        SaveDebugInfo($"Created image element with placeholder: {placeholderPath}");
                     }
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Error creating image element: {ex.Message}");
+                    SaveDebugInfo($"Error creating image element: {ex.Message}");
                     return; // Exit the method instead of using continue
                 }
             }
@@ -1818,13 +1822,21 @@ namespace PrintSystem.Dialogs
                         }
                         else if (element is ImageElement imageElement)
                         {
-                            // Check if we should use the sample item's image instead of the placeholder
+                            // Get the image path from the element
                             string imagePath = imageElement.GetImagePath();
                             
-                            // If we have a sample item with an image, use that instead of the placeholder
-                            if (sampleItem != null && !string.IsNullOrEmpty(sampleItem.ImagePath) && File.Exists(sampleItem.ImagePath))
+                            // Check if it's a placeholder image (filename contains "placeholder")
+                            bool isPlaceholder = !string.IsNullOrEmpty(imagePath) && 
+                                               (imagePath.ToLower().Contains("placeholder") || 
+                                                Path.GetFileName(imagePath).ToLower() == "placeholder.png");
+                            
+                            // If we have a sample item with an image, and we have a placeholder or no valid image, use the sample item's image
+                            if (sampleItem != null && !string.IsNullOrEmpty(sampleItem.ImagePath) && 
+                                File.Exists(sampleItem.ImagePath) && 
+                                (isPlaceholder || string.IsNullOrEmpty(imagePath) || !File.Exists(imagePath)))
                             {
                                 imagePath = sampleItem.ImagePath;
+                                SaveDebugInfo($"Using item image: {imagePath}");
                             }
                             
                             if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
@@ -1998,190 +2010,136 @@ namespace PrintSystem.Dialogs
 
         private void TemplateComboBox_SelectedIndexChanged(object sender, EventArgs e)
         {
-            string selectedTemplate = templateComboBox.SelectedItem?.ToString();
+            if (templateComboBox.SelectedItem == null) return;
             
-            if (selectedTemplate == "ADD NEW")
+            // Clear existing elements
+            foreach (var element in labelElements)
             {
-                // Trigger the save as new functionality
-                SaveTemplateButton_Click(sender, e);
+                element.Dispose();
+            }
+            labelElements.Clear();
+            
+            // Get the selected template
+            string templateName = templateComboBox.SelectedItem.ToString();
+            if (labelTemplates.TryGetValue(templateName, out LabelTemplate template))
+            {
+                // Update label dimensions
+                labelWidthInput.Value = template.Width;
+                labelHeightInput.Value = template.Height;
                 
-                // If save was cancelled or unsuccessful, revert to previous selection
-                if (templateComboBox.SelectedItem?.ToString() == "ADD NEW")
+                // Add all elements from the template
+                foreach (var elementInfo in template.Elements)
                 {
-                    // Try to select any valid template
-                    for (int i = 0; i < templateComboBox.Items.Count; i++)
-                    {
-                        string item = templateComboBox.Items[i].ToString();
-                        if (item != "ADD NEW" && item != "-------------------")
-                        {
-                            templateComboBox.SelectedIndex = i;
-                            break;
-                        }
-                    }
-                }
-                return;
-            }
-            
-            if (selectedTemplate == "-------------------")
-            {
-                // If separator is selected, skip it
-                for (int i = 0; i < templateComboBox.Items.Count; i++)
-                {
-                    string item = templateComboBox.Items[i].ToString();
-                    if (item != "ADD NEW" && item != "-------------------")
-                    {
-                        templateComboBox.SelectedIndex = i;
-                        break;
-                    }
-                }
-                return;
-            }
-
-            // Load the selected template
-            if (!string.IsNullOrEmpty(selectedTemplate) && labelTemplates.ContainsKey(selectedTemplate))
-            {
-                try {
-                    // Load template
-                    var template = labelTemplates[selectedTemplate];
-
-                    // Clear existing elements
-                    foreach (var element in labelElements)
-                    {
-                        element.Dispose();
-                    }
-                    labelElements.Clear();
-
-                    // Set dimensions
-                    labelWidthInput.Value = template.Width;
-                    labelHeightInput.Value = template.Height;
-
-                    // Load elements
-                    foreach (var elementInfo in template.Elements)
+                    try
                     {
                         LabelElement element = null;
+                        
+                        // Convert bounds from the serialized format
+                        Rectangle bounds = elementInfo.Bounds;
+                        
                         switch (elementInfo.Type)
                         {
                             case "Text":
                                 element = new TextElement(elementInfo.Content, 
-                                    new Point(elementInfo.Bounds.X, elementInfo.Bounds.Y),
-                                    elementInfo.FontFamily ?? "Arial",
-                                    elementInfo.FontSize > 0 ? elementInfo.FontSize : 12);
+                                    new Point(bounds.X, bounds.Y), 
+                                    elementInfo.FontFamily, 
+                                    elementInfo.FontSize);
                                 break;
-
+                                
                             case "QR":
-                                try
+                                // Generate a QR code image
+                                var writer = new BarcodeWriter<Bitmap>
                                 {
-                                    var writer = new BarcodeWriter<Bitmap>
+                                    Format = BarcodeFormat.QR_CODE,
+                                    Options = new QrCodeEncodingOptions
                                     {
-                                        Format = BarcodeFormat.QR_CODE,
-                                        Options = new QrCodeEncodingOptions
-                                        {
-                                            Width = 300,
-                                            Height = 300,
-                                            Margin = 1,
-                                            ErrorCorrection = ZXing.QrCode.Internal.ErrorCorrectionLevel.M
-                                        },
-                                        Renderer = new BitmapRenderer()
-                                    };
+                                        Width = 300,
+                                        Height = 300,
+                                        Margin = 1,
+                                        ErrorCorrection = ZXing.QrCode.Internal.ErrorCorrectionLevel.M
+                                    },
+                                    Renderer = new BitmapRenderer()
+                                };
 
-                                    string qrContent = elementInfo.Content;
-                                    if (currentItem != null)
-                                    {
-                                        qrContent = qrContent.Replace("{ModelNumber}", currentItem.ModelNumber ?? "")
-                                                           .Replace("{Description}", currentItem.Description ?? "")
-                                                           .Replace("{Supplier}", currentItem.Supplier ?? "")
-                                                           .Replace("{Category}", currentItem.CategoryPath ?? "Uncategorized")
-                                                           .Replace("{DefaultOrderQuantity}", currentItem.DefaultOrderQuantity.ToString())
-                                                           .Replace("{ProductURL}", currentItem.ProductUrl ?? "");
-                                    }
-
-                                    Image qrImage = writer.Write(qrContent);
-                                    element = new QRElement(qrImage, 
-                                                          new Point(elementInfo.Bounds.X, elementInfo.Bounds.Y),
-                                                          elementInfo.QRTemplateKey,
-                                                          elementInfo.Content);
-                                    
-                                    // Set the QR template in the combo box if it exists
-                                    if (!string.IsNullOrEmpty(elementInfo.QRTemplateKey))
-                                    {
-                                        for (int i = 0; i < qrTemplateComboBox.Items.Count; i++)
-                                        {
-                                            if (qrTemplateComboBox.Items[i].ToString() == elementInfo.QRTemplateKey)
-                                            {
-                                                qrTemplateComboBox.SelectedIndex = i;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                                catch (Exception ex)
+                                string qrContent = elementInfo.Content;
+                                if (currentItem != null)
                                 {
-                                    Console.WriteLine($"Error regenerating QR code: {ex.Message}");
-                                    continue;
+                                    qrContent = qrContent.Replace("{ModelNumber}", currentItem.ModelNumber ?? "")
+                                                       .Replace("{Description}", currentItem.Description ?? "")
+                                                       .Replace("{Supplier}", currentItem.Supplier ?? "")
+                                                       .Replace("{Category}", currentItem.CategoryPath ?? "Uncategorized")
+                                                       .Replace("{DefaultOrderQuantity}", currentItem.DefaultOrderQuantity.ToString())
+                                                       .Replace("{ProductURL}", currentItem.ProductUrl ?? "");
                                 }
+
+                                Image qrImage = writer.Write(qrContent);
+                                element = new QRElement(qrImage, 
+                                    new Point(bounds.X, bounds.Y), 
+                                    elementInfo.QRTemplateKey,
+                                    elementInfo.Content);
                                 break;
-
+                                
                             case "Image":
-                                try {
-                                    string imagePath = elementInfo.Content;
-                                    
-                                    // If we have a current item with an image, use that instead
-                                    if (currentItem != null && !string.IsNullOrEmpty(currentItem.ImagePath) && File.Exists(currentItem.ImagePath))
+                                string imagePath = elementInfo.Content;
+                                
+                                // If we have a current item with an image, and the content path is a placeholder or doesn't exist
+                                if (currentItem != null && !string.IsNullOrEmpty(currentItem.ImagePath) && File.Exists(currentItem.ImagePath))
+                                {
+                                    bool isPlaceholder = !string.IsNullOrEmpty(imagePath) && 
+                                                       (imagePath.ToLower().Contains("placeholder") || 
+                                                        Path.GetFileName(imagePath).ToLower() == "placeholder.png");
+                                        
+                                    if (isPlaceholder || string.IsNullOrEmpty(imagePath) || !File.Exists(imagePath))
                                     {
                                         imagePath = currentItem.ImagePath;
-                                    }
-                                    
-                                    // Check if the image exists
-                                    if (File.Exists(imagePath))
-                                    {
-                                        element = new ImageElement(imagePath, new Point(elementInfo.Bounds.X, elementInfo.Bounds.Y));
-                                    }
-                                    else
-                                    {
-                                        // Create and use a placeholder image if the original is not found
-                                        string placeholderPath = Path.Combine(Application.StartupPath, "placeholder.png");
-                                        if (!File.Exists(placeholderPath))
-                                        {
-                                            // Create a simple placeholder image if it doesn't exist
-                                            using (var placeholderImage = new Bitmap(100, 100))
-                                            using (var g = Graphics.FromImage(placeholderImage))
-                                            {
-                                                g.Clear(Color.White);
-                                                g.DrawRectangle(Pens.Gray, 0, 0, 99, 99);
-                                                g.DrawString("Image", new Font("Arial", 12), Brushes.Gray, 
-                                                    new Rectangle(0, 0, 100, 100), 
-                                                    new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center });
-                                                
-                                                placeholderImage.Save(placeholderPath, ImageFormat.Png);
-                                            }
-                                        }
-                                        element = new ImageElement(placeholderPath, new Point(elementInfo.Bounds.X, elementInfo.Bounds.Y));
-                                        
-                                        // Just log a warning rather than skipping this element
-                                        Console.WriteLine($"Image file not found: {elementInfo.Content}, using placeholder instead");
+                                        SaveDebugInfo($"Loading template: Using item image instead of placeholder: {imagePath}");
                                     }
                                 }
-                                catch (Exception ex)
+                                
+                                if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
                                 {
-                                    Console.WriteLine($"Error creating image element: {ex.Message}");
-                                    continue;
+                                    element = new ImageElement(imagePath, new Point(bounds.X, bounds.Y));
+                                }
+                                else
+                                {
+                                    // Create a placeholder
+                                    string placeholderPath = Path.Combine(Application.StartupPath, "placeholder.png");
+                                    if (!File.Exists(placeholderPath))
+                                    {
+                                        using (var placeholderImage = new Bitmap(100, 100))
+                                        using (var g = Graphics.FromImage(placeholderImage))
+                                        {
+                                            g.Clear(Color.White);
+                                            g.DrawRectangle(Pens.Gray, 0, 0, 99, 99);
+                                            g.DrawString("Image", new Font("Arial", 12), Brushes.Gray, 
+                                                new Rectangle(0, 0, 100, 100), 
+                                                new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center });
+                                            
+                                            placeholderImage.Save(placeholderPath, ImageFormat.Png);
+                                        }
+                                    }
+                                    element = new ImageElement(placeholderPath, new Point(bounds.X, bounds.Y));
+                                    SaveDebugInfo($"Loading template: Using placeholder image for Image element: {placeholderPath}");
                                 }
                                 break;
                         }
-
+                        
                         if (element != null)
                         {
-                            element.Bounds = elementInfo.Bounds;
+                            // Set the bounds to match the saved template
+                            element.Bounds = bounds;
                             labelElements.Add(element);
                         }
                     }
-
-                    designCanvas.Invalidate();
-                    Console.WriteLine($"Template '{selectedTemplate}' loaded successfully");
+                    catch (Exception ex)
+                    {
+                        SaveDebugInfo($"Error loading element from template: {ex.Message}");
+                    }
                 }
-                catch (Exception ex) {
-                    MessageBox.Show($"Error loading template: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
+                
+                // Update the canvas to show the new template
+                UpdateCanvasSize();
+                designCanvas.Invalidate();
             }
         }
 
