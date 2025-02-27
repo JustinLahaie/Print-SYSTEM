@@ -370,6 +370,22 @@ namespace PrintSystem.Dialogs
             };
         }
 
+        private void SaveDebugInfo(string message)
+        {
+            try
+            {
+                string debugPath = Path.Combine(Application.StartupPath, "label_debug.log");
+                using (StreamWriter writer = new StreamWriter(debugPath, true))
+                {
+                    writer.WriteLine($"[{DateTime.Now}] {message}");
+                }
+            }
+            catch
+            {
+                // Silently fail for debug logging
+            }
+        }
+
         private void InitializeComponents()
         {
             this.Text = "Label Builder";
@@ -722,6 +738,9 @@ namespace PrintSystem.Dialogs
                         elementInfo.Content = textElement.GetText();
                         elementInfo.FontFamily = textElement.GetFontFamily();
                         elementInfo.FontSize = textElement.GetFontSize();
+                        
+                        // Save some debug info about what's being saved
+                        SaveDebugInfo($"Saving TextElement to template: Content='{elementInfo.Content}'");
                     }
                     else if (element is QRElement qrElement)
                     {
@@ -1560,6 +1579,26 @@ namespace PrintSystem.Dialogs
 
             // Use the first item as a sample
             var sampleItem = items.First();
+            
+            // Debug sample item information
+            SaveDebugInfo($"Print preview sample item: ID={sampleItem.Id}, Model={sampleItem.ModelNumber}, Supplier={sampleItem.Supplier}");
+            SaveDebugInfo($"Number of label elements: {labelElements.Count}");
+            
+            foreach (var element in labelElements)
+            {
+                if (element is TextElement textElement)
+                {
+                    SaveDebugInfo($"TextElement: Text='{textElement.GetText()}', Font={textElement.GetFontFamily()}, Size={textElement.GetFontSize()}");
+                }
+                else if (element is ImageElement)
+                {
+                    SaveDebugInfo($"ImageElement detected");
+                }
+                else if (element is QRElement qrElement)
+                {
+                    SaveDebugInfo($"QRElement: Content='{qrElement.GetTemplateContent()?.Substring(0, Math.Min(qrElement.GetTemplateContent()?.Length ?? 0, 50))}...'");
+                }
+            }
 
             // Create a preview form
             using (var previewForm = new Form())
@@ -1617,50 +1656,114 @@ namespace PrintSystem.Dialogs
                         {
                             // Get the actual text with item data
                             string text = textElement.GetText();
+                            string originalText = text;
+                            
+                            // Save debug info
+                            SaveDebugInfo($"Processing text element in preview: '{text}'");
+                            
                             // Replace placeholders with actual values
-                            switch (text)
+                            switch (text.Trim())
                             {
                                 case "Model Number":
                                     text = sampleItem.ModelNumber ?? "";
+                                    SaveDebugInfo($"Matched 'Model Number' → '{text}'");
                                     break;
                                 case "Description":
                                     text = sampleItem.Description ?? "";
+                                    SaveDebugInfo($"Matched 'Description' → '{text}'");
                                     break;
                                 case "Supplier":
                                     text = sampleItem.Supplier ?? "";
+                                    SaveDebugInfo($"Matched 'Supplier' → '{text}'");
                                     break;
                                 case "Category":
                                     text = sampleItem.CategoryPath ?? "Uncategorized";
+                                    SaveDebugInfo($"Matched 'Category' → '{text}'");
                                     break;
                                 case "Default Order Quantity":
                                     text = sampleItem.DefaultOrderQuantity.ToString();
+                                    SaveDebugInfo($"Matched 'Default Order Quantity' → '{text}'");
                                     break;
                                 case "Product URL":
                                     text = sampleItem.ProductUrl ?? "";
+                                    SaveDebugInfo($"Matched 'Product URL' → '{text}'");
                                     break;
                                 default:
-                                    // If it contains placeholders in curly braces
-                                    if (text.Contains("{"))
+                                    // Check for field names without exact case matching
+                                    if (text.Trim().Equals("supplier", StringComparison.OrdinalIgnoreCase))
                                     {
+                                        text = sampleItem.Supplier ?? "";
+                                        SaveDebugInfo($"Case-insensitive matched 'supplier' → '{text}'");
+                                    }
+                                    else if (text.Trim().Equals("description", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        text = sampleItem.Description ?? "";
+                                        SaveDebugInfo($"Case-insensitive matched 'description' → '{text}'");
+                                    }
+                                    else if (text.Trim().Equals("category", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        text = sampleItem.CategoryPath ?? "Uncategorized";
+                                        SaveDebugInfo($"Case-insensitive matched 'category' → '{text}'");
+                                    }
+                                    else if (text.Trim().Equals("model number", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        text = sampleItem.ModelNumber ?? "";
+                                        SaveDebugInfo($"Case-insensitive matched 'model number' → '{text}'");
+                                    }
+                                    else if (text.Trim().Equals("default order quantity", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        text = sampleItem.DefaultOrderQuantity.ToString();
+                                        SaveDebugInfo($"Case-insensitive matched 'default order quantity' → '{text}'");
+                                    }
+                                    else if (text.Trim().Equals("product url", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        text = sampleItem.ProductUrl ?? "";
+                                        SaveDebugInfo($"Case-insensitive matched 'product url' → '{text}'");
+                                    }
+                                    // If it contains placeholders in curly braces
+                                    else if (text.Contains("{"))
+                                    {
+                                        SaveDebugInfo($"Found template with placeholders: '{text}'");
                                         text = text.Replace("{ModelNumber}", sampleItem.ModelNumber ?? "")
                                                  .Replace("{Description}", sampleItem.Description ?? "")
                                                  .Replace("{Supplier}", sampleItem.Supplier ?? "")
                                                  .Replace("{Category}", sampleItem.CategoryPath ?? "Uncategorized")
                                                  .Replace("{DefaultOrderQuantity}", sampleItem.DefaultOrderQuantity.ToString())
                                                  .Replace("{ProductURL}", sampleItem.ProductUrl ?? "");
+                                        SaveDebugInfo($"After replacing placeholders: '{text}'");
+                                    }
+                                    else
+                                    {
+                                        SaveDebugInfo($"No field match for: '{text}', keeping original text");
                                     }
                                     break;
                             }
-
+                            
                             // Draw text with the same font and position
                             using (var font = new Font(textElement.GetFontFamily(), textElement.GetFontSize()))
                             {
+                                // Create a clear formatting style
                                 var format = new StringFormat
                                 {
                                     Alignment = StringAlignment.Center,
                                     LineAlignment = StringAlignment.Center
                                 };
-                                pe.Graphics.DrawString(text, font, Brushes.Black, adjustedBounds, format);
+                                
+                                // Draw the text with appropriate color - use red for debugging empty values
+                                Brush textBrush = string.IsNullOrWhiteSpace(text) ? Brushes.Red : Brushes.Black;
+                                
+                                // If text was not substituted, use the original text color
+                                if (text == originalText && !text.Contains("{"))
+                                {
+                                    pe.Graphics.DrawString(text, font, textBrush, adjustedBounds, format);
+                                }
+                                else
+                                {
+                                    pe.Graphics.DrawString(text, font, textBrush, adjustedBounds, format);
+                                }
+                                
+                                // Draw a border around text elements for better visibility
+                                pe.Graphics.DrawRectangle(Pens.LightGray, adjustedBounds);
                             }
                         }
                         else if (element is QRElement qrElement)
