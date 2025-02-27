@@ -9,6 +9,8 @@ using PrintSystem.Models;
 using PrintSystem.Managers;
 using PrintSystem.Dialogs;
 using CategoryManager = PrintSystem.Managers.CategoryManager;
+using System.Text.Json;
+using ZXing.Windows.Compatibility;
 
 namespace PrintSystem.Forms
 {
@@ -260,11 +262,7 @@ namespace PrintSystem.Forms
                 Dock = DockStyle.Right,
                 Margin = new Padding(0, 5, 0, 5)
             };
-            printPreviewButton.Click += (s, e) =>
-            {
-                // TODO: Implement print preview functionality
-                MessageBox.Show("Print Preview functionality will be implemented soon!", "Coming Soon");
-            };
+            printPreviewButton.Click += PrintPreviewButton_Click;
             layout.Controls.Add(printPreviewButton, 1, 8);
 
             // Add Debug Output
@@ -716,6 +714,357 @@ namespace PrintSystem.Forms
                 LogDebug($"Error saving item: {ex.Message}");
                 DialogResult = DialogResult.None;  // Prevent dialog from closing on error
             }
+        }
+
+        private void PrintPreviewButton_Click(object sender, EventArgs e)
+        {
+            // Create a temporary item with form values for preview
+            Item previewItem = new Item
+            {
+                ModelNumber = modelNumberTextBox.Text,
+                Description = descriptionTextBox.Text,
+                Supplier = supplierComboBox.SelectedItem?.ToString(),
+                CategoryPath = categoryComboBox.SelectedItem is CategoryWrapper wrapper ? wrapper.Category.GetFullPath() : null,
+                DefaultOrderQuantity = (int)quantityNumericUpDown.Value,
+                ProductUrl = urlTextBox.Text,
+                ImagePath = selectedImagePath
+            };
+            
+            // Get default template from settings
+            var settings = SettingsManager.GetSettings();
+            string templateName = settings.DefaultLabelTemplate;
+            
+            // Show a label preview dialog with the current item
+            ShowLabelPreview(previewItem, templateName);
+        }
+        
+        private void ShowLabelPreview(Item item, string templateName)
+        {
+            // Check if the label templates are loaded
+            var labelBuilderDialog = new LabelBuilderDialog(item);
+            
+            // Access the label templates from the dialog
+            var templateMethod = labelBuilderDialog.GetType().GetMethod("LoadLabelTemplates", 
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            templateMethod?.Invoke(labelBuilderDialog, null);
+            
+            // Create a preview form
+            using (var previewForm = new Form())
+            {
+                previewForm.Text = "Label Print Preview";
+                previewForm.Size = new Size(800, 600);
+                previewForm.StartPosition = FormStartPosition.CenterParent;
+                previewForm.MinimizeBox = false;
+                previewForm.MaximizeBox = false;
+                previewForm.FormBorderStyle = FormBorderStyle.FixedDialog;
+
+                // Create preview panel
+                Panel previewPanel = new Panel
+                {
+                    Dock = DockStyle.Fill,
+                    BackColor = Color.LightGray,
+                    AutoScroll = true
+                };
+                
+                // Get the template from the dialog
+                var templatesField = labelBuilderDialog.GetType().GetField("labelTemplates", 
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                
+                if (templatesField != null)
+                {
+                    var templates = templatesField.GetValue(labelBuilderDialog);
+                    
+                    // Check if the template exists using reflection
+                    var containsKeyMethod = templates.GetType().GetMethod("ContainsKey");
+                    var indexerProperty = templates.GetType().GetProperty("Item");
+                    
+                    if (containsKeyMethod != null && 
+                        indexerProperty != null && 
+                        (bool)containsKeyMethod.Invoke(templates, new object[] { templateName }))
+                    {
+                        var template = indexerProperty.GetValue(templates, new object[] { templateName });
+                        
+                        // Use reflection to get template properties
+                        var widthProperty = template.GetType().GetProperty("Width");
+                        var heightProperty = template.GetType().GetProperty("Height");
+                        var elementsProperty = template.GetType().GetProperty("Elements");
+                        
+                        decimal width = Convert.ToDecimal(widthProperty?.GetValue(template) ?? 100m);
+                        decimal height = Convert.ToDecimal(heightProperty?.GetValue(template) ?? 50m);
+                        var elements = elementsProperty?.GetValue(template) as System.Collections.IEnumerable;
+
+                        // Create a white panel to represent the paper
+                        Panel paperPanel = new Panel
+                        {
+                            BackColor = Color.White,
+                            Location = new Point(20, 20),
+                            Size = new Size(
+                                (int)(width * 4.0m), // 4 pixels per mm
+                                (int)(height * 4.0m)
+                            ),
+                            Margin = new Padding(0)
+                        };
+                        
+                        // Add paint handler for the paper panel
+                        paperPanel.Paint += (s, pe) =>
+                        {
+                            // Call method to render label with the item
+                            RenderLabelPreview(pe.Graphics, paperPanel, item, elements);
+                        };
+                        
+                        // Add paper panel to preview panel
+                        previewPanel.Controls.Add(paperPanel);
+                    }
+                    else
+                    {
+                        // Show a message if the template doesn't exist
+                        Label noTemplateLabel = new Label
+                        {
+                            Text = $"Template '{templateName}' not found. Please check settings.",
+                            Dock = DockStyle.Fill,
+                            TextAlign = ContentAlignment.MiddleCenter,
+                            Font = new Font(Font.FontFamily, 12)
+                        };
+                        previewPanel.Controls.Add(noTemplateLabel);
+                    }
+                }
+                else
+                {
+                    // Show a message if we couldn't access templates
+                    Label errorLabel = new Label
+                    {
+                        Text = "Could not access label templates. Please check settings.",
+                        Dock = DockStyle.Fill,
+                        TextAlign = ContentAlignment.MiddleCenter,
+                        Font = new Font(Font.FontFamily, 12)
+                    };
+                    previewPanel.Controls.Add(errorLabel);
+                }
+
+                // Add print button
+                Button printButton = new Button
+                {
+                    Text = "Print",
+                    Dock = DockStyle.Bottom,
+                    Height = 40
+                };
+                printButton.Click += (s, pe) =>
+                {
+                    using (var printDialog = new PrintDialog())
+                    {
+                        if (printDialog.ShowDialog() == DialogResult.OK)
+                        {
+                            // Will be implemented in future update
+                            MessageBox.Show("Printing will be implemented in a future update.", "Coming Soon");
+                        }
+                    }
+                };
+
+                // Add close button
+                Button closeButton = new Button
+                {
+                    Text = "Close",
+                    Dock = DockStyle.Bottom,
+                    Height = 40
+                };
+                closeButton.Click += (s, pe) => previewForm.Close();
+
+                // Add controls to the preview form
+                previewForm.Controls.Add(previewPanel);
+                previewForm.Controls.Add(printButton);
+                previewForm.Controls.Add(closeButton);
+
+                // Show the preview
+                previewForm.ShowDialog();
+            }
+            
+            // Clean up the dialog
+            labelBuilderDialog.Dispose();
+        }
+        
+        private void RenderLabelPreview(Graphics g, Panel paper, Item item, System.Collections.IEnumerable elements)
+        {
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            
+            if (elements == null) return;
+            
+            // Process each element in the template
+            foreach (var element in elements)
+            {
+                try
+                {
+                    var typeProperty = element.GetType().GetProperty("Type");
+                    var boundsProperty = element.GetType().GetProperty("Bounds");
+                    var contentProperty = element.GetType().GetProperty("Content");
+                    var fontFamilyProperty = element.GetType().GetProperty("FontFamily");
+                    var fontSizeProperty = element.GetType().GetProperty("FontSize");
+                    var qrTemplateKeyProperty = element.GetType().GetProperty("QRTemplateKey");
+                    
+                    string type = (string)typeProperty?.GetValue(element);
+                    Rectangle bounds = (Rectangle)boundsProperty?.GetValue(element);
+                    string content = (string)contentProperty?.GetValue(element);
+                    
+                    // Convert from template space to preview space
+                    // The original bounds from the template include the MARGIN (40px) offset
+                    // We need to subtract this MARGIN to correctly position elements in the preview
+                    const int DESIGN_MARGIN = 40; // Same as MARGIN in LabelBuilderDialog
+                    Rectangle adjustedBounds = new Rectangle(
+                        bounds.X - DESIGN_MARGIN,
+                        bounds.Y - DESIGN_MARGIN,
+                        bounds.Width,
+                        bounds.Height
+                    );
+                    
+                    // Ensure bounds remain within the paper area
+                    if (adjustedBounds.X < 0) adjustedBounds.X = 0;
+                    if (adjustedBounds.Y < 0) adjustedBounds.Y = 0;
+                    if (adjustedBounds.Right > paper.Width) adjustedBounds.Width = paper.Width - adjustedBounds.X;
+                    if (adjustedBounds.Bottom > paper.Height) adjustedBounds.Height = paper.Height - adjustedBounds.Y;
+                    
+                    switch (type)
+                    {
+                        case "Text":
+                            // Replace placeholders with actual values
+                            string text = ReplaceItemPlaceholders(content, item);
+                            
+                            string fontFamily = (string)fontFamilyProperty?.GetValue(element) ?? "Arial";
+                            float fontSize = Convert.ToSingle(fontSizeProperty?.GetValue(element) ?? 10f);
+                            
+                            using (var font = new Font(fontFamily, fontSize))
+                            {
+                                var format = new StringFormat
+                                {
+                                    Alignment = StringAlignment.Center,
+                                    LineAlignment = StringAlignment.Center
+                                };
+                                g.DrawString(text, font, Brushes.Black, adjustedBounds, format);
+                            }
+                            break;
+                            
+                        case "QR":
+                            // Get QR content - try to get from QRTemplateKey first
+                            string qrTemplateKey = (string)qrTemplateKeyProperty?.GetValue(element);
+                            string qrContent;
+                            
+                            if (!string.IsNullOrEmpty(qrTemplateKey))
+                            {
+                                // This is a reference to a stored QR template
+                                LogDebug($"Using QR template key: {qrTemplateKey}");
+                                
+                                // Get the QR templates file path
+                                string qrTemplatesFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "qr_templates.json");
+                                Dictionary<string, string> qrTemplates = new Dictionary<string, string>();
+                                
+                                // Try to load QR templates
+                                if (File.Exists(qrTemplatesFile))
+                                {
+                                    try
+                                    {
+                                        string json = File.ReadAllText(qrTemplatesFile);
+                                        qrTemplates = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        LogDebug($"Error loading QR templates: {ex.Message}");
+                                    }
+                                }
+                                
+                                // Get the template content
+                                if (qrTemplates.TryGetValue(qrTemplateKey, out string templateContent))
+                                {
+                                    qrContent = templateContent;
+                                }
+                                else
+                                {
+                                    // Handle built-in templates
+                                    qrContent = qrTemplateKey switch
+                                    {
+                                        "Basic Info" => "Model: {ModelNumber} | Description: {Description}",
+                                        "Full Details" => "Model: {ModelNumber}"
+                                            + " | Description: {Description}"
+                                            + " | Supplier: {Supplier}"
+                                            + " | Category: {Category}"
+                                            + " | Order Qty: {DefaultOrderQuantity}"
+                                            + " | URL: {ProductURL}",
+                                        "URL Only" => "{ProductURL}",
+                                        _ => content // Fall back to content field
+                                    };
+                                }
+                            }
+                            else
+                            {
+                                // Use the content field directly
+                                qrContent = content;
+                            }
+                            
+                            // Replace placeholders with actual values
+                            qrContent = ReplaceItemPlaceholders(qrContent, item);
+                            
+                            // Generate QR code
+                            try
+                            {
+                                var writer = new ZXing.BarcodeWriter<Bitmap>
+                                {
+                                    Format = ZXing.BarcodeFormat.QR_CODE,
+                                    Options = new ZXing.QrCode.QrCodeEncodingOptions
+                                    {
+                                        Width = adjustedBounds.Width,
+                                        Height = adjustedBounds.Height,
+                                        Margin = 1,
+                                        ErrorCorrection = ZXing.QrCode.Internal.ErrorCorrectionLevel.M
+                                    },
+                                    Renderer = new BitmapRenderer()
+                                };
+
+                                using (var qrImage = writer.Write(qrContent))
+                                {
+                                    g.DrawImage(qrImage, adjustedBounds);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                LogDebug($"Error generating QR code: {ex.Message}");
+                            }
+                            break;
+                            
+                        case "Image":
+                            // Use item's image if available, otherwise use the image path from the template
+                            string imagePath = !string.IsNullOrEmpty(item.ImagePath) ? item.ImagePath : content;
+                            
+                            if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
+                            {
+                                try
+                                {
+                                    using (var image = Image.FromFile(imagePath))
+                                    {
+                                        g.DrawImage(image, adjustedBounds);
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    LogDebug($"Error loading image: {ex.Message}");
+                                }
+                            }
+                            break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogDebug($"Error rendering element: {ex.Message}");
+                }
+            }
+        }
+        
+        private string ReplaceItemPlaceholders(string text, Item item)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            
+            return text.Replace("{ModelNumber}", item.ModelNumber ?? "")
+                     .Replace("{Description}", item.Description ?? "")
+                     .Replace("{Supplier}", item.Supplier ?? "")
+                     .Replace("{Category}", item.Category?.GetFullPath() ?? "Uncategorized")
+                     .Replace("{DefaultOrderQuantity}", item.DefaultOrderQuantity.ToString())
+                     .Replace("{ProductURL}", item.ProductUrl ?? "");
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
