@@ -718,6 +718,17 @@ namespace PrintSystem.Forms
 
         private void PrintPreviewButton_Click(object sender, EventArgs e)
         {
+            // Verify image path exists before proceeding
+            if (string.IsNullOrEmpty(selectedImagePath) || !File.Exists(selectedImagePath))
+            {
+                LogDebug($"Warning: Image path is invalid or doesn't exist: {selectedImagePath}");
+                MessageBox.Show(
+                    "The image path for this item is invalid or the file doesn't exist. The preview may not display images correctly.", 
+                    "Image Path Warning", 
+                    MessageBoxButtons.OK, 
+                    MessageBoxIcon.Warning);
+            }
+            
             // Create a temporary item with form values for preview
             Item previewItem = new Item
             {
@@ -741,35 +752,97 @@ namespace PrintSystem.Forms
         private void ShowLabelPreview(Item item, string templateName)
         {
             // Create a label builder dialog with the item
-            var labelBuilderDialog = new LabelBuilderDialog(item);
+            LabelBuilderDialog labelBuilderDialog = null;
             
-            // Call the print preview method directly
-            var printButtonClickMethod = labelBuilderDialog.GetType().GetMethod("PrintButton_Click", 
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            
-            if (printButtonClickMethod != null)
+            try
             {
-                // Invoke the print preview with empty EventArgs
-                printButtonClickMethod.Invoke(labelBuilderDialog, new object[] { null, EventArgs.Empty });
+                // Skip preview if item is null
+                if (item == null)
+                {
+                    LogDebug("Cannot show label preview: Item is null");
+                    MessageBox.Show("Cannot create a preview without item data.", "Preview Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                
+                // Make sure there's at least a model number
+                if (string.IsNullOrWhiteSpace(item.ModelNumber))
+                {
+                    LogDebug("Cannot show label preview: Item has no model number");
+                    MessageBox.Show("Please enter a model number before previewing the label.", "Preview Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                
+                LogDebug($"Creating label preview for item: {item.ModelNumber}");
+                labelBuilderDialog = new LabelBuilderDialog(item);
+
+                // Get the PrintButton_Click method using reflection
+                var printButtonClickMethod = labelBuilderDialog.GetType().GetMethod("PrintButton_Click", 
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                
+                if (printButtonClickMethod != null)
+                {
+                    // Invoke the print preview with empty EventArgs
+                    LogDebug("Invoking PrintButton_Click via reflection");
+                    printButtonClickMethod.Invoke(labelBuilderDialog, new object[] { null, EventArgs.Empty });
+                }
+                else
+                {
+                    LogDebug("Could not find PrintButton_Click method via reflection");
+                    MessageBox.Show("Could not generate label preview.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
             }
-            else
+            catch (Exception ex)
             {
-                MessageBox.Show("Could not generate label preview.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                LogDebug($"Error during label preview: {ex.Message}");
+                
+                // Get the inner exception if it's a reflection exception
+                Exception realException = ex;
+                if (ex is System.Reflection.TargetInvocationException && ex.InnerException != null)
+                {
+                    realException = ex.InnerException;
+                    LogDebug($"Inner exception: {realException.Message}");
+                }
+                
+                MessageBox.Show($"Error generating label preview: {realException.Message}", 
+                    "Preview Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
-            
-            // Clean up the dialog
-            labelBuilderDialog.Dispose();
+            finally
+            {
+                // Ensure the dialog is properly disposed
+                if (labelBuilderDialog != null)
+                {
+                    try
+                    {
+                        labelBuilderDialog.Dispose();
+                        LogDebug("Label builder dialog disposed");
+                    }
+                    catch (Exception disposeEx)
+                    {
+                        LogDebug($"Error disposing label builder dialog: {disposeEx.Message}");
+                    }
+                }
+            }
         }
         
         private void RenderLabelPreview(Graphics g, Panel paper, Item item, System.Collections.IEnumerable elements)
         {
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             
-            if (elements == null) return;
+            if (elements == null)
+            {
+                LogDebug("RenderLabelPreview: No elements to render (elements collection is null)");
+                return;
+            }
+            
+            LogDebug($"RenderLabelPreview: Starting to render label for item: {item?.ModelNumber ?? "Unknown"}");
+            LogDebug($"RenderLabelPreview: Image path for item: {item?.ImagePath ?? "None"}");
+
+            int elementCount = 0;
             
             // Process each element in the template
             foreach (var element in elements)
             {
+                elementCount++;
                 try
                 {
                     var typeProperty = element.GetType().GetProperty("Type");
@@ -782,6 +855,8 @@ namespace PrintSystem.Forms
                     string type = (string)typeProperty?.GetValue(element);
                     Rectangle bounds = (Rectangle)boundsProperty?.GetValue(element);
                     string content = (string)contentProperty?.GetValue(element);
+                    
+                    LogDebug($"RenderLabelPreview: Processing element {elementCount} - Type: {type ?? "null"}, Content: {content ?? "null"}");
                     
                     // Convert from template space to preview space
                     // The original bounds from the template include the MARGIN (40px) offset
@@ -907,9 +982,13 @@ namespace PrintSystem.Forms
                             break;
                             
                         case "Image":
-                            // Use item's image if available, otherwise use the image path from the template
-                            string imagePath = !string.IsNullOrEmpty(item.ImagePath) ? item.ImagePath : content;
+                            // Apply placeholder replacement to content first (in case it contains placeholders)
+                            string replacedContent = ReplaceItemPlaceholders(content, item);
+                            string imagePath = !string.IsNullOrEmpty(item.ImagePath) ? item.ImagePath : replacedContent;
                             
+                            LogDebug($"Attempting to load image from path: {imagePath}");
+                            
+                            bool imageRendered = false;
                             if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
                             {
                                 try
@@ -917,12 +996,57 @@ namespace PrintSystem.Forms
                                     using (var image = Image.FromFile(imagePath))
                                     {
                                         g.DrawImage(image, adjustedBounds);
+                                        LogDebug($"Successfully rendered image from: {imagePath}");
+                                        imageRendered = true;
                                     }
                                 }
                                 catch (Exception ex)
                                 {
                                     LogDebug($"Error loading image: {ex.Message}");
                                 }
+                            }
+                            else
+                            {
+                                // Log why the image is not being displayed
+                                if (string.IsNullOrEmpty(imagePath))
+                                {
+                                    LogDebug("Image not displayed: Path is empty");
+                                }
+                                else if (!File.Exists(imagePath))
+                                {
+                                    LogDebug($"Image not displayed: File does not exist at path: {imagePath}");
+                                }
+                            }
+                            
+                            // If image couldn't be rendered, draw a placeholder rectangle with text
+                            if (!imageRendered)
+                            {
+                                // Draw a placeholder rectangle
+                                using (var pen = new Pen(Color.Gray, 2))
+                                {
+                                    pen.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash;
+                                    g.DrawRectangle(pen, adjustedBounds);
+                                    
+                                    // Draw placeholder text
+                                    using (var font = new Font("Arial", 8))
+                                    {
+                                        var textRect = new Rectangle(
+                                            adjustedBounds.X + 5,
+                                            adjustedBounds.Y + 5,
+                                            adjustedBounds.Width - 10,
+                                            adjustedBounds.Height - 10
+                                        );
+                                        
+                                        var format = new StringFormat
+                                        {
+                                            Alignment = StringAlignment.Center,
+                                            LineAlignment = StringAlignment.Center
+                                        };
+                                        
+                                        g.DrawString("No Image Available", font, Brushes.Gray, textRect, format);
+                                    }
+                                }
+                                LogDebug("Drew placeholder rectangle for missing image");
                             }
                             break;
                     }
@@ -943,7 +1067,8 @@ namespace PrintSystem.Forms
                      .Replace("{Supplier}", item.Supplier ?? "")
                      .Replace("{Category}", item.Category?.GetFullPath() ?? "Uncategorized")
                      .Replace("{DefaultOrderQuantity}", item.DefaultOrderQuantity.ToString())
-                     .Replace("{ProductURL}", item.ProductUrl ?? "");
+                     .Replace("{ProductURL}", item.ProductUrl ?? "")
+                     .Replace("{ImagePath}", item.ImagePath ?? "");
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)

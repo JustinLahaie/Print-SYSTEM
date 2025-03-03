@@ -12,6 +12,8 @@ namespace PrintSystem.Dialogs
     public class SettingsDialog : Form
     {
         private ComboBox defaultLabelComboBox;
+        private ComboBox defaultLabelTemplateComboBox;
+        private ComboBox printOrientationComboBox;
         private Button saveButton;
         private Button cancelButton;
         private Button labelBuilderButton;
@@ -81,7 +83,7 @@ namespace PrintSystem.Dialogs
             TableLayoutPanel labelSettingsLayout = new TableLayoutPanel
             {
                 AutoSize = true,
-                RowCount = 1,
+                RowCount = 3,
                 ColumnCount = 2,
                 Padding = new Padding(0),
                 Margin = new Padding(0, 5, 0, 0)
@@ -95,24 +97,71 @@ namespace PrintSystem.Dialogs
                 Width = 150
             };
             defaultLabelComboBox.Items.Clear();
-
+            
             // Add MAIN template first if it exists
             if (labelTemplates.ContainsKey("MAIN"))
             {
                 defaultLabelComboBox.Items.Add("MAIN");
-                defaultLabelComboBox.Items.Add("-------------------");
             }
-
-            // Add other saved templates
-            foreach (string templateName in labelTemplates.Keys)
+            
+            // Add other templates alphabetically
+            foreach (var template in labelTemplates.Keys)
             {
-                if (templateName != "MAIN")
+                if (template != "MAIN")
                 {
-                    defaultLabelComboBox.Items.Add(templateName);
+                    defaultLabelComboBox.Items.Add(template);
                 }
             }
-
+            
+            // Add available template types
+            if (defaultLabelComboBox.Items.Count == 0)
+            {
+                defaultLabelComboBox.Items.Add("Basic Label");
+            }
+            
             labelSettingsLayout.Controls.Add(defaultLabelComboBox, 1, 0);
+            
+            // Default Label Template
+            labelSettingsLayout.Controls.Add(new Label { Text = "Default Template:", Anchor = AnchorStyles.Left }, 0, 1);
+            defaultLabelTemplateComboBox = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Width = 150
+            };
+            
+            // Add MAIN template first if it exists
+            if (labelTemplates.ContainsKey("MAIN"))
+            {
+                defaultLabelTemplateComboBox.Items.Add("MAIN");
+            }
+            
+            // Add other templates alphabetically
+            foreach (var template in labelTemplates.Keys)
+            {
+                if (template != "MAIN")
+                {
+                    defaultLabelTemplateComboBox.Items.Add(template);
+                }
+            }
+            
+            // Add at least one default option
+            if (defaultLabelTemplateComboBox.Items.Count == 0)
+            {
+                defaultLabelTemplateComboBox.Items.Add("MAIN");
+            }
+            
+            labelSettingsLayout.Controls.Add(defaultLabelTemplateComboBox, 1, 1);
+
+            // Print Orientation
+            labelSettingsLayout.Controls.Add(new Label { Text = "Print Orientation:", Anchor = AnchorStyles.Left }, 0, 2);
+            printOrientationComboBox = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Width = 150
+            };
+            printOrientationComboBox.Items.Add("Landscape");
+            printOrientationComboBox.Items.Add("Portrait");
+            labelSettingsLayout.Controls.Add(printOrientationComboBox, 1, 2);
 
             labelSettingsGroup.Controls.Add(labelSettingsLayout);
             mainLayout.Controls.Add(labelSettingsGroup, 0, 0);
@@ -214,24 +263,54 @@ namespace PrintSystem.Dialogs
                     defaultLabelComboBox.SelectedIndex = 0;
                 }
             }
+            
+            // Set the default label template
+            if (defaultLabelTemplateComboBox.Items.Count > 0)
+            {
+                // Try to select the saved template
+                defaultLabelTemplateComboBox.SelectedItem = settings.DefaultLabelTemplate;
+                
+                // If the saved template isn't in the list, select the first template
+                if (defaultLabelTemplateComboBox.SelectedItem == null)
+                {
+                    defaultLabelTemplateComboBox.SelectedIndex = 0;
+                }
+            }
+
+            // Select the print orientation
+            if (printOrientationComboBox.Items.Contains(settings.PrintOrientation))
+            {
+                printOrientationComboBox.SelectedItem = settings.PrintOrientation;
+            }
+            else
+            {
+                printOrientationComboBox.SelectedItem = "Landscape";
+            }
         }
 
         private void SaveButton_Click(object sender, EventArgs e)
         {
-            if (defaultLabelComboBox.SelectedItem == null)
+            try
             {
-                MessageBox.Show("Please select a default label template.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
+                // Get current settings
+                var settings = SettingsManager.GetSettings();
+                
+                // Update settings with dialog values
+                settings.DefaultLabelType = defaultLabelComboBox.SelectedItem?.ToString() ?? "Basic Label";
+                settings.DefaultLabelTemplate = defaultLabelTemplateComboBox.SelectedItem?.ToString() ?? "MAIN";
+                settings.PrintOrientation = printOrientationComboBox.SelectedItem?.ToString() ?? "Landscape";
+                
+                // Save settings
+                SettingsManager.SaveSettings(settings);
+                
+                // Close dialog
+                this.DialogResult = DialogResult.OK;
+                this.Close();
             }
-
-            // Save settings to SettingsManager
-            var settings = new Settings
+            catch (Exception ex)
             {
-                DefaultLabelType = defaultLabelComboBox.SelectedItem.ToString(),
-                LabelMargin = 2.0 // Use default margin value
-            };
-
-            SettingsManager.SaveSettings(settings);
+                MessageBox.Show($"Error saving settings: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void LabelBuilderButton_Click(object sender, EventArgs e)

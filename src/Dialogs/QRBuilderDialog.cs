@@ -1,6 +1,7 @@
 using System;
 using System.Windows.Forms;
 using System.Drawing;
+using System.Drawing.Printing;
 using System.Linq;
 using System.Text;
 using PrintSystem.Models;
@@ -760,10 +761,93 @@ namespace PrintSystem.Dialogs
 
             using (var printDialog = new PrintDialog())
             {
-                if (printDialog.ShowDialog() == DialogResult.OK)
+                try
                 {
-                    // TODO: Implement printing with proper scaling and positioning
-                    MessageBox.Show("Printing will be implemented in the next update.", "Coming Soon");
+                    // Create a PrintDocument for printing
+                    var printDocument = new PrintDocument();
+                    printDocument.DocumentName = $"QR Code - {currentItem?.ModelNumber ?? "Custom"}";
+                    
+                    // Set the PrintDocument to the PrintDialog
+                    printDialog.Document = printDocument;
+                    
+                    // Store a local reference to the QR image to avoid threading issues
+                    var qrImageToPrint = qrPreview.Image;
+                    
+                    // Handle the printing
+                    printDocument.PrintPage += (sender, e) => 
+                    {
+                        // Calculate print area
+                        float pageWidth = e.PageSettings.PrintableArea.Width;
+                        float pageHeight = e.PageSettings.PrintableArea.Height;
+                        
+                        // Set high quality rendering
+                        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                        e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                        e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                        
+                        // Calculate centering positions
+                        float xPos = (pageWidth - qrImageToPrint.Width) / 2;
+                        float yPos = (pageHeight - qrImageToPrint.Height) / 2;
+                        
+                        // Ensure the QR code is at least 1 inch in size
+                        float minSize = 100f; // 1 inch = 100 units at 100 DPI
+                        float maxSize = Math.Min(pageWidth * 0.8f, pageHeight * 0.8f); // 80% of the page
+                        
+                        float qrSize = Math.Max(minSize, Math.Min(maxSize, 300f)); // Default to 3 inches, but within bounds
+                        
+                        // Create a destination rectangle that centers the QR code on the page
+                        RectangleF destRect = new RectangleF(
+                            (pageWidth - qrSize) / 2,
+                            (pageHeight - qrSize) / 2,
+                            qrSize,
+                            qrSize
+                        );
+                        
+                        // Draw the QR code
+                        e.Graphics.DrawImage(qrImageToPrint, destRect);
+                        
+                        // Add content info below the QR code
+                        if (contentTextBox.Text.Length > 0)
+                        {
+                            string displayText = contentTextBox.Text;
+                            if (displayText.Length > 50)
+                            {
+                                displayText = displayText.Substring(0, 47) + "...";
+                            }
+                            
+                            using (Font font = new Font("Arial", 8))
+                            {
+                                RectangleF textRect = new RectangleF(
+                                    (pageWidth - qrSize) / 2,
+                                    destRect.Bottom + 10,
+                                    qrSize,
+                                    40
+                                );
+                                
+                                StringFormat format = new StringFormat
+                                {
+                                    Alignment = StringAlignment.Center,
+                                    LineAlignment = StringAlignment.Near
+                                };
+                                
+                                e.Graphics.DrawString(displayText, font, Brushes.Black, textRect, format);
+                            }
+                        }
+                        
+                        // No more pages
+                        e.HasMorePages = false;
+                    };
+                    
+                    // Show the print dialog
+                    if (printDialog.ShowDialog() == DialogResult.OK)
+                    {
+                        printDocument.Print();
+                        MessageBox.Show("QR code sent to printer!", "Print Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Error during print operation: {ex.Message}", "Print Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
         }
@@ -814,27 +898,33 @@ namespace PrintSystem.Dialogs
 
         private void UpdateMainButton_Click(object sender, EventArgs e)
         {
-            if (MessageBox.Show("Are you sure you want to update the MAIN template? This will overwrite the existing MAIN template.",
-                "Confirm Update", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            string selectedTemplate = templateComboBox.SelectedItem?.ToString();
+            if (string.IsNullOrEmpty(selectedTemplate))
+            {
+                MessageBox.Show("Please select a template to update.", "No Template Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (selectedTemplate.Equals("-------------------"))
+            {
+                MessageBox.Show("Please select a valid template to update.", "Invalid Selection", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string confirmMessage = selectedTemplate.Equals("MAIN", StringComparison.OrdinalIgnoreCase)
+                ? "Are you sure you want to update the MAIN template? This will overwrite the existing MAIN template."
+                : $"Are you sure you want to update the '{selectedTemplate}' template? This will overwrite the existing template.";
+
+            if (MessageBox.Show(confirmMessage, "Confirm Update", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
             {
                 return;
             }
 
-            // Save the current content as MAIN template
-            savedTemplates["MAIN"] = contentTextBox.Text;
+            // Save the current content to the selected template
+            savedTemplates[selectedTemplate] = contentTextBox.Text;
             SaveTemplates();
 
-            // Add to combo box if not exists
-            if (!templateComboBox.Items.Contains("MAIN"))
-            {
-                templateComboBox.Items.Insert(0, "MAIN");
-                if (templateComboBox.Items.Count == 1 || !templateComboBox.Items.Contains("-------------------"))
-                {
-                    templateComboBox.Items.Insert(1, "-------------------");
-                }
-            }
-
-            MessageBox.Show("MAIN template updated successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show($"Template '{selectedTemplate}' updated successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
             this.DialogResult = DialogResult.OK;
         }
 
