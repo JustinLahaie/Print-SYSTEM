@@ -1289,8 +1289,8 @@ namespace PrintSystem.Dialogs
                     Format = BarcodeFormat.QR_CODE,
                     Options = new QrCodeEncodingOptions
                     {
-                        Width = 300,  // Medium size
-                        Height = 300,
+                        Width = 1200,  // Much higher resolution for better quality
+                        Height = 1200,
                         Margin = 1,
                         ErrorCorrection = ZXing.QrCode.Internal.ErrorCorrectionLevel.M
                     },
@@ -1364,8 +1364,8 @@ namespace PrintSystem.Dialogs
                                     Format = BarcodeFormat.QR_CODE,
                                     Options = new QrCodeEncodingOptions
                                     {
-                                        Width = 300,
-                                        Height = 300,
+                                        Width = 600,
+                                        Height = 600,
                                         Margin = 1,
                                         ErrorCorrection = ZXing.QrCode.Internal.ErrorCorrectionLevel.M
                                     },
@@ -1804,357 +1804,154 @@ namespace PrintSystem.Dialogs
                                 var printDocument = new PrintDocument();
                                 printDocument.DocumentName = $"Label - {sampleItem?.ModelNumber ?? "Unknown"}";
                                 
+                                // Get settings
+                                var settings = SettingsManager.GetSettings();
+                                
+                                // Set default printer if configured
+                                if (!string.IsNullOrEmpty(settings.DefaultLabelPrinter))
+                                {
+                                    try
+                                    {
+                                        // Check if the printer exists
+                                        bool printerExists = false;
+                                        foreach (string printer in PrinterSettings.InstalledPrinters)
+                                        {
+                                            if (printer == settings.DefaultLabelPrinter)
+                                            {
+                                                printerExists = true;
+                                                break;
+                                            }
+                                        }
+                                        
+                                        if (printerExists)
+                                        {
+                                            printDocument.PrinterSettings.PrinterName = settings.DefaultLabelPrinter;
+                                            SaveDebugInfo($"Using default label printer: {settings.DefaultLabelPrinter}");
+                                        }
+                                        else
+                                        {
+                                            SaveDebugInfo($"Configured printer '{settings.DefaultLabelPrinter}' not found");
+                                        }
+                                    }
+                                    catch (Exception printerEx)
+                                    {
+                                        SaveDebugInfo($"Error setting printer: {printerEx.Message}");
+                                    }
+                                }
+                                
                                 // Set the PrintDocument to the PrintDialog
                                 printDialog.Document = printDocument;
                                 
                                 // Get the print orientation from settings
-                                var settings = SettingsManager.GetSettings();
                                 bool isPortrait = settings.PrintOrientation == "Portrait";
                                 SaveDebugInfo($"Print orientation: {settings.PrintOrientation}");
                                 
                                 // Handle the printing
                                 printDocument.PrintPage += (sender, e) => 
                                 {
-                                    SaveDebugInfo("PrintPage event started");
-                                    
-                                    // Calculate the scale to fit the label on the printed page
-                                    float pageWidth = e.PageSettings.PrintableArea.Width;
-                                    float pageHeight = e.PageSettings.PrintableArea.Height;
-                                    
-                                    // Get label dimensions in printer units (1/100 inch)
-                                    float labelWidthInInches = (float)labelWidth / 25.4f; // Convert mm to inches
-                                    float labelHeightInInches = (float)labelHeight / 25.4f;
-                                    
-                                    // Initialize paper dimensions
-                                    float paperWidthInInches = labelWidthInInches;
-                                    float paperHeightInInches = labelHeightInInches;
-                                    
-                                    // Calculate printer units (1/100 inch)
-                                    float labelWidthInUnits = labelWidthInInches * 100f;
-                                    float labelHeightInUnits = labelHeightInInches * 100f;
-                                    
-                                    // Log the actual dimensions in mm that the printer will receive
-                                    float actualWidthMM = labelWidthInUnits * 0.254f;  // Convert back to mm for debugging
-                                    float actualHeightMM = labelHeightInUnits * 0.254f;
-                                    
-                                    SaveDebugInfo($"BEFORE adjustments - Original dimensions (mm): Width={actualWidthMM:F2}, Height={actualHeightMM:F2}");
-                                    
-                                    // When in portrait mode, swap width and height for the printer dimensions
-                                    // to ensure the label size matches the physical label size
-                                    if (isPortrait)
-                                    {
-                                        SaveDebugInfo($"Original dimensions (mm): Width={actualWidthMM:F2}, Height={actualHeightMM:F2}");
-                                        
-                                        // We need to swap dimensions for physical correctness when in portrait
-                                        float temp = labelWidthInUnits;
-                                        labelWidthInUnits = labelHeightInUnits;
-                                        labelHeightInUnits = temp;
-                                        
-                                        // Also swap paper dimensions
-                                        paperWidthInInches = labelHeightInInches;
-                                        paperHeightInInches = labelWidthInInches;
-                                        
-                                        // Recalculate actual dimensions for logging
-                                        actualWidthMM = labelWidthInUnits * 0.254f;
-                                        actualHeightMM = labelHeightInUnits * 0.254f;
-                                    }
-                                    
-                                    SaveDebugInfo($"Printing label dimensions (mm): Width={actualWidthMM:F2}, Height={actualHeightMM:F2}");
-                                    
-                                    // Create a custom paper size with precise dimensions
-                                    string paperSizeName = $"Custom{(int)(labelWidth)}x{(int)(labelHeight)}";
-                                    
-                                    // Ensure the PaperSize is created with precise dimensions
-                                    PaperSize customSize = new PaperSize(
-                                        paperSizeName,
-                                        (int)Math.Round(paperWidthInInches * 100),
-                                        (int)Math.Round(paperHeightInInches * 100)
-                                    );
-                                    
-                                    // Set page settings to match label dimensions to ensure correct sizing
-                                    e.PageSettings.PaperSize = customSize;
-                                    
-                                    // Force custom size - this helps with some printer drivers
-                                    printDocument.DefaultPageSettings.PaperSize = customSize;
-                                    
-                                    // Set landscape/portrait mode explicitly to match our orientation
-                                    e.PageSettings.Landscape = !isPortrait;
-                                    printDocument.DefaultPageSettings.Landscape = !isPortrait;
-                                    
-                                    // Disable margins to prevent size alterations
-                                    e.PageSettings.Margins = new Margins(0, 0, 0, 0);
-                                    printDocument.DefaultPageSettings.Margins = new Margins(0, 0, 0, 0);
-                                    
-                                    SaveDebugInfo($"Page settings - Landscape: {e.PageSettings.Landscape}, " +
-                                        $"Paper size: {e.PageSettings.PaperSize.Width/100.0f}\"x{e.PageSettings.PaperSize.Height/100.0f}\" " +
-                                        $"({e.PageSettings.PaperSize.Width * 0.254f:F2}mm x {e.PageSettings.PaperSize.Height * 0.254f:F2}mm)");
-                                    
-                                    // Print with margins
-                                    float xMargin = 0; // No margin for label printers
-                                    float yMargin = 0; // No margin for label printers
-                                    
-                                    // Create a rectangle for the label - use the full printable area
-                                    RectangleF labelRect = new RectangleF(
-                                        xMargin, 
-                                        yMargin, 
-                                        labelWidthInUnits, 
-                                        labelHeightInUnits);
-                                    
-                                    SaveDebugInfo($"Printing label rect: X={labelRect.X}, Y={labelRect.Y}, Width={labelRect.Width}, Height={labelRect.Height}");
-                                    
-                                    // Set high quality rendering
+                                    // Set high quality rendering for print output
                                     e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                                     e.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
                                     e.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                                    e.Graphics.CompositingQuality = CompositingQuality.HighQuality;
                                     
-                                    // Apply rotation for portrait mode (only during printing, not preview)
-                                    GraphicsState state = null;
-                                    if (isPortrait)
+                                    // Calculate label dimensions in pixels
+                                    int labelWidthPx = (int)((double)labelWidth * DPI_SCALE);
+                                    int labelHeightPx = (int)((double)labelHeight * DPI_SCALE);
+                                        
+                                    // Create a bitmap to draw the content - increase resolution to create higher quality output
+                                    using (var bitmap = new Bitmap(labelWidthPx * 2, labelHeightPx * 2))
                                     {
-                                        SaveDebugInfo("Rotating graphics for portrait printing");
-                                        
-                                        // Save the current state of the graphics object
-                                        state = e.Graphics.Save();
-                                        
-                                        // Calculate center point of the label
-                                        float centerX = labelRect.X + (labelRect.Width / 2);
-                                        float centerY = labelRect.Y + (labelRect.Height / 2);
-                                        
-                                        // Translate to center, rotate, and translate back
-                                        e.Graphics.TranslateTransform(centerX, centerY);
-                                        e.Graphics.RotateTransform(90); // Rotate 90 degrees
-                                        e.Graphics.TranslateTransform(-centerX, -centerY);
-                                    }
-                                    
-                                    // Draw a white background for the label
-                                    e.Graphics.FillRectangle(Brushes.White, labelRect);
-                                    
-                                    // Draw all elements
+                                        using (var g = Graphics.FromImage(bitmap))
+                                        {
+                                            // Set high quality rendering for the bitmap
+                                            g.SmoothingMode = SmoothingMode.AntiAlias;
+                                            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                                            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                                            g.CompositingQuality = CompositingQuality.HighQuality;
+                                            g.Clear(Color.White);
+                                            
+                                            // Draw all elements with actual item data
                                     foreach (var element in elementsToDisplay)
                                     {
-                                        try
-                                        {
-                                            // Convert design canvas coordinates to printer coordinates
-                                            var elementRect = new RectangleF(
-                                                xMargin + ((float)element.Bounds.X - MARGIN) * labelWidthInUnits / paperPanel.Width,
-                                                yMargin + ((float)element.Bounds.Y - MARGIN) * labelHeightInUnits / paperPanel.Height,
-                                                (float)element.Bounds.Width * labelWidthInUnits / paperPanel.Width,
-                                                (float)element.Bounds.Height * labelHeightInUnits / paperPanel.Height
-                                            );
+                                                // Create adjusted bounds to correctly position elements
+                                                var adjustedBounds = new Rectangle(
+                                                    element.Bounds.X - MARGIN,
+                                                    element.Bounds.Y - MARGIN,
+                                                    element.Bounds.Width,
+                                                    element.Bounds.Height
+                                                );
+                                                
+                                                // Ensure no negative coordinates
+                                                if (adjustedBounds.X < 0) adjustedBounds.X = 0;
+                                                if (adjustedBounds.Y < 0) adjustedBounds.Y = 0;
                                             
                                             if (element is TextElement textElement)
                                             {
-                                                // Get the text content
-                                                string text = textElement.GetText();
-                                                
-                                                // Replace placeholders with actual values
-                                                switch (text.Trim())
-                                                {
-                                                    case "Model Number":
-                                                        text = sampleItem?.ModelNumber ?? "";
-                                                        break;
-                                                    case "Description":
-                                                        text = sampleItem?.Description ?? "";
-                                                        break;
-                                                    case "Supplier":
-                                                        text = sampleItem?.Supplier ?? "";
-                                                        break;
-                                                    case "Category":
-                                                        text = sampleItem?.CategoryPath ?? "Uncategorized";
-                                                        break;
-                                                    case "Default Order Quantity":
-                                                        text = sampleItem?.DefaultOrderQuantity.ToString() ?? "";
-                                                        break;
-                                                    case "Product URL":
-                                                        text = sampleItem?.ProductUrl ?? "";
-                                                        break;
-                                                }
-                                                
-                                                // Create a string format for text alignment
-                                                var format = new StringFormat
-                                                {
-                                                    Alignment = StringAlignment.Center,
-                                                    LineAlignment = StringAlignment.Center
-                                                };
-                                                
-                                                // Calculate font size for printing
-                                                float fontSize = CalculateBestFitFontSize(
-                                                    e.Graphics, 
-                                                    text, 
-                                                    new FontFamily(textElement.GetFontFamily()), 
-                                                    Rectangle.Round(elementRect));
-                                                
-                                                using (var font = new Font(textElement.GetFontFamily(), fontSize))
-                                                {
-                                                    e.Graphics.DrawString(text, font, Brushes.Black, elementRect, format);
-                                                }
+                                                    RenderTextElement(g, textElement, adjustedBounds, sampleItem);
                                             }
                                             else if (element is QRElement qrElement)
                                             {
-                                                // Handle QR code printing
-                                                string templateKey = qrElement.GetTemplateKey();
-                                                string templateContent = qrElement.GetTemplateContent();
-                                                
-                                                if (string.IsNullOrEmpty(templateContent))
-                                                {
-                                                    templateContent = "Model: {ModelNumber} | Description: {Description}";
-                                                }
-                                                
-                                                // Replace placeholders
-                                                string qrContent = templateContent
-                                                    .Replace("{ModelNumber}", sampleItem?.ModelNumber ?? "")
-                                                    .Replace("{Description}", sampleItem?.Description ?? "")
-                                                    .Replace("{Supplier}", sampleItem?.Supplier ?? "")
-                                                    .Replace("{Category}", sampleItem?.CategoryPath ?? "Uncategorized")
-                                                    .Replace("{DefaultOrderQuantity}", sampleItem?.DefaultOrderQuantity.ToString() ?? "0")
-                                                    .Replace("{ProductURL}", sampleItem?.ProductUrl ?? "");
-                                                
-                                                try
-                                                {
-                                                    var writer = new BarcodeWriter<Bitmap>
-                                                    {
-                                                        Format = BarcodeFormat.QR_CODE,
-                                                        Options = new QrCodeEncodingOptions
-                                                        {
-                                                            Width = (int)elementRect.Width,
-                                                            Height = (int)elementRect.Height,
-                                                            Margin = 1,
-                                                            ErrorCorrection = ZXing.QrCode.Internal.ErrorCorrectionLevel.M
-                                                        },
-                                                        Renderer = new BitmapRenderer()
-                                                    };
-                                                    
-                                                    using (var qrImage = writer.Write(qrContent))
-                                                    {
-                                                        e.Graphics.DrawImage(qrImage, elementRect);
-                                                        SaveDebugInfo("Successfully printed QR code");
-                                                    }
-                                                }
-                                                catch (Exception qrEx)
-                                                {
-                                                    SaveDebugInfo($"Error printing QR code: {qrEx.Message}");
-                                                    
-                                                    // Draw placeholder for QR
-                                                    e.Graphics.DrawRectangle(Pens.Black, 
-                                                        elementRect.X, elementRect.Y, elementRect.Width, elementRect.Height);
-                                                        
-                                                    // Add text to indicate it's a QR code
-                                                    using (var font = new Font("Arial", 8))
-                                                    {
-                                                        var format = new StringFormat
-                                                        {
-                                                            Alignment = StringAlignment.Center,
-                                                            LineAlignment = StringAlignment.Center
-                                                        };
-                                                        e.Graphics.DrawString("QR Code", font, Brushes.Black, elementRect, format);
-                                                    }
-                                                }
+                                                    RenderQRElement(g, qrElement, adjustedBounds, sampleItem);
                                             }
                                             else if (element is ImageElement imageElement)
                                             {
-                                                SaveDebugInfo($"Printing image element. Path: {imageElement.GetImagePath()}");
-                                                
-                                                bool imagePrinted = false;
-                                                
-                                                // Try to use the item's actual image first
-                                                if (sampleItem != null && !string.IsNullOrEmpty(sampleItem.ImagePath) && File.Exists(sampleItem.ImagePath))
-                                                {
-                                                    try
-                                                    {
-                                                        using (var itemImage = Image.FromFile(sampleItem.ImagePath))
-                                                        {
-                                                            e.Graphics.DrawImage(itemImage, elementRect);
-                                                            imagePrinted = true;
-                                                            SaveDebugInfo($"Successfully printed item image: {sampleItem.ImagePath}");
-                                                        }
-                                                    }
-                                                    catch (Exception imgEx)
-                                                    {
-                                                        SaveDebugInfo($"Error printing item image: {imgEx.Message}");
-                                                    }
-                                                }
-                                                
-                                                // If that fails, try the image element's path
-                                                if (!imagePrinted)
-                                                {
-                                                    string imagePath = imageElement.GetImagePath();
-                                                    if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath) && !imageElement.IsPlaceholder())
-                                                    {
-                                                        try
-                                                        {
-                                                            using (var elementImage = Image.FromFile(imagePath))
-                                                            {
-                                                                e.Graphics.DrawImage(elementImage, elementRect);
-                                                                imagePrinted = true;
-                                                                SaveDebugInfo($"Successfully printed element image: {imagePath}");
-                                                            }
-                                                        }
-                                                        catch (Exception elemImgEx)
-                                                        {
-                                                            SaveDebugInfo($"Error printing element image: {elemImgEx.Message}");
-                                                        }
-                                                    }
-                                                }
-                                                
-                                                // If all fails, draw a placeholder
-                                                if (!imagePrinted)
-                                                {
-                                                    SaveDebugInfo("Drawing image placeholder for printing");
-                                                    
-                                                    // Draw a placeholder rectangle
-                                                    e.Graphics.DrawRectangle(Pens.Gray, 
-                                                        elementRect.X, elementRect.Y, elementRect.Width, elementRect.Height);
-                                                        
-                                                    // Draw diagonal lines to indicate it's a placeholder
-                                                    e.Graphics.DrawLine(Pens.LightGray, 
-                                                        elementRect.X, elementRect.Y, 
-                                                        elementRect.X + elementRect.Width, elementRect.Y + elementRect.Height);
-                                                    e.Graphics.DrawLine(Pens.LightGray, 
-                                                        elementRect.X, elementRect.Y + elementRect.Height, 
-                                                        elementRect.X + elementRect.Width, elementRect.Y);
-                                                    
-                                                    // Add text to indicate it's an image
-                                                    using (var font = new Font("Arial", 7))
-                                                    {
-                                                        var format = new StringFormat
-                                                        {
-                                                            Alignment = StringAlignment.Center,
-                                                            LineAlignment = StringAlignment.Center
-                                                        };
-                                                        e.Graphics.DrawString("No Image Available", font, Brushes.Gray, elementRect, format);
-                                                    }
+                                                    RenderImageElement(g, imageElement, adjustedBounds, sampleItem);
                                                 }
                                             }
                                         }
-                                        catch (Exception elementEx)
+                                        
+                                        // Calculate target rectangle for drawing the bitmap in correct orientation
+                                        Rectangle destRect;
+                                        if (isPortrait)
+                                                {
+                                            destRect = new Rectangle(
+                                                e.MarginBounds.Left,
+                                                e.MarginBounds.Top,
+                                                Math.Min(e.MarginBounds.Width, labelWidthPx),
+                                                Math.Min(e.MarginBounds.Height, labelHeightPx)
+                                            );
+                                                        }
+                                        else
                                         {
-                                            SaveDebugInfo($"Error printing element: {elementEx.Message}");
+                                            // In landscape, swap width and height
+                                            destRect = new Rectangle(
+                                                e.MarginBounds.Left,
+                                                e.MarginBounds.Top,
+                                                Math.Min(e.MarginBounds.Width, labelHeightPx),
+                                                Math.Min(e.MarginBounds.Height, labelWidthPx)
+                                            );
                                         }
+                                        
+                                        // Draw the bitmap to the print document with high quality settings
+                                        // Set destination and source rectangles for highest quality scaling
+                                        Rectangle srcRect = new Rectangle(0, 0, bitmap.Width, bitmap.Height);
+                                        e.Graphics.DrawImage(bitmap, destRect, srcRect, GraphicsUnit.Pixel);
                                     }
                                     
                                     // Only print one page
                                     e.HasMorePages = false;
-                                    SaveDebugInfo("PrintPage event completed successfully");
-                                    
-                                    // Restore graphics state if we rotated
-                                    if (isPortrait && state != null)
-                                    {
-                                        e.Graphics.Restore(state);
-                                    }
                                 };
                                 
-                                // Show print dialog
+                                // Show the print dialog directly instead of the print preview dialog
                                 if (printDialog.ShowDialog() == DialogResult.OK)
+                                {
+                                    try
                                 {
                                     printDocument.Print();
                                 }
+                                    catch (Exception printEx)
+                                    {
+                                        SaveDebugInfo($"Error during print: {printEx.Message}");
+                                        MessageBox.Show($"Error printing: {printEx.Message}", "Print Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                             }
                         }
-                        catch (Exception printEx)
+                            }
+                        }
+                        catch (Exception ex)
                         {
-                            SaveDebugInfo($"Error during print operation: {printEx.Message}");
-                            MessageBox.Show("An error occurred during print operation: " + printEx.Message, 
-                                "Print Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            SaveDebugInfo($"Error in PrintButtonClick: {ex.Message}");
+                            MessageBox.Show($"Error preparing to print: {ex.Message}", "Print Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                         }
                     }
                 }
@@ -2245,10 +2042,15 @@ namespace PrintSystem.Dialogs
                 Brush textBrush = string.IsNullOrWhiteSpace(text) ? Brushes.Red : Brushes.Black;
                 
                 // Calculate best font size to fit the bounds
-                float bestSize = CalculateBestFitFontSize(g, text, new FontFamily(textElement.GetFontFamily()), bounds);
-                using (var scaledFont = new Font(textElement.GetFontFamily(), bestSize))
+                float bestSize = CalculateBestFitFontSize(
+                    g, 
+                    text, 
+                    new FontFamily(textElement.GetFontFamily()), 
+                    Rectangle.Round(bounds));
+                
+                using (var font = new Font(textElement.GetFontFamily(), bestSize))
                 {
-                    g.DrawString(text, scaledFont, textBrush, bounds, format);
+                    g.DrawString(text, font, textBrush, bounds, format);
                 }
                 
                 // Draw a border around text elements for better visibility
@@ -2265,6 +2067,36 @@ namespace PrintSystem.Dialogs
         {
             try
             {
+                // Check if we can use the original high-resolution bitmap
+                var originalBitmap = qrElement.GetOriginalBitmap();
+                if (originalBitmap != null)
+                {
+                    // Use the high-res bitmap directly
+                    // Configure high-quality drawing
+                    var oldInterpolationMode = g.InterpolationMode;
+                    var oldPixelOffsetMode = g.PixelOffsetMode;
+                    var oldCompositingQuality = g.CompositingQuality;
+                    var oldSmoothingMode = g.SmoothingMode;
+                    
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    g.CompositingQuality = CompositingQuality.HighQuality;
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    
+                    // Draw the original high-res QR code image using PixelFormat-preserving method
+                    g.DrawImage(originalBitmap, bounds);
+                    
+                    // Restore previous graphics settings
+                    g.InterpolationMode = oldInterpolationMode;
+                    g.PixelOffsetMode = oldPixelOffsetMode;
+                    g.CompositingQuality = oldCompositingQuality;
+                    g.SmoothingMode = oldSmoothingMode;
+                    
+                    SaveDebugInfo("Successfully rendered QR code from high-res bitmap");
+                    return;
+                }
+                
+                // If no original bitmap is available, continue with standard generation
                 // Get the QR content template, defaulting to a basic template if none exists
                 string qrContent = qrElement.GetTemplateContent();
                 if (string.IsNullOrEmpty(qrContent))
@@ -2300,18 +2132,58 @@ namespace PrintSystem.Dialogs
                         Format = BarcodeFormat.QR_CODE,
                         Options = new QrCodeEncodingOptions
                         {
-                            Width = bounds.Width,
-                            Height = bounds.Height,
+                            // Create larger QR code for better resolution
+                            Width = Math.Max(600, bounds.Width * 4),  // Increased resolution
+                            Height = Math.Max(600, bounds.Height * 4), // Increased resolution
                             Margin = 1,
                             ErrorCorrection = ZXing.QrCode.Internal.ErrorCorrectionLevel.M
                         },
-                        Renderer = new BitmapRenderer()
+                        Renderer = new BitmapRenderer
+                        {
+                            // Specify the background and foreground colors explicitly
+                            Background = Color.White,
+                            Foreground = Color.Black
+                        }
                     };
 
-                    using (var qrImage = writer.Write(qrContent))
+                    // Generate and draw the QR code using intermediate bitmap to preserve quality
+                    using (var generatedQrImage = writer.Write(qrContent))
+                    using (var intermediateBitmap = new Bitmap(generatedQrImage.Width, generatedQrImage.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
                     {
-                        g.DrawImage(qrImage, bounds);
-                        SaveDebugInfo("Successfully rendered QR code");
+                        // Create a high-quality copy
+                        using (var intermediateGraphics = Graphics.FromImage(intermediateBitmap))
+                        {
+                            intermediateGraphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                            intermediateGraphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                            intermediateGraphics.CompositingQuality = CompositingQuality.HighQuality;
+                            intermediateGraphics.SmoothingMode = SmoothingMode.AntiAlias;
+                            
+                            // Draw with white background first
+                            intermediateGraphics.Clear(Color.White);
+                            intermediateGraphics.DrawImage(generatedQrImage, 0, 0, generatedQrImage.Width, generatedQrImage.Height);
+                        }
+                        
+                        // Set high quality rendering for the destination graphics
+                        var oldInterpolationMode = g.InterpolationMode;
+                        var oldPixelOffsetMode = g.PixelOffsetMode;
+                        var oldCompositingQuality = g.CompositingQuality;
+                        var oldSmoothingMode = g.SmoothingMode;
+                        
+                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                        g.CompositingQuality = CompositingQuality.HighQuality;
+                        g.SmoothingMode = SmoothingMode.AntiAlias;
+                        
+                        // Draw the intermediate bitmap to the destination
+                        g.DrawImage(intermediateBitmap, bounds);
+                        
+                        // Restore previous graphics settings
+                        g.InterpolationMode = oldInterpolationMode;
+                        g.PixelOffsetMode = oldPixelOffsetMode;
+                        g.CompositingQuality = oldCompositingQuality;
+                        g.SmoothingMode = oldSmoothingMode;
+                        
+                        SaveDebugInfo("Successfully rendered QR code through intermediate bitmap");
                     }
                 }
                 catch (Exception qrEx)
@@ -2605,8 +2477,8 @@ namespace PrintSystem.Dialogs
                                     Format = BarcodeFormat.QR_CODE,
                                     Options = new QrCodeEncodingOptions
                                     {
-                                        Width = 300,
-                                        Height = 300,
+                                        Width = 600,
+                                        Height = 600,
                                         Margin = 1,
                                         ErrorCorrection = ZXing.QrCode.Internal.ErrorCorrectionLevel.M
                                     },
@@ -2847,44 +2719,206 @@ namespace PrintSystem.Dialogs
             
             return bestSize;
         }
+    }
 
-        // Add this new method to the class, before the closing brace of the class
-        private void LogAvailablePaperSizes(PrintDocument printDocument)
+    // Label element classes
+    public abstract class LabelElement : IDisposable
+    {
+        protected Rectangle bounds;
+        protected Point dragOffset;
+        protected bool isResizing;
+        protected int resizeHandle = -1;
+        
+        public Rectangle Bounds 
+        { 
+            get => bounds;
+            set => bounds = value;
+        }
+        public bool IsResizing => isResizing;
+
+        public abstract void Draw(Graphics g);
+        
+        public virtual void StartDrag(Point mouseLocation)
         {
-            try
+            dragOffset = new Point(
+                mouseLocation.X - bounds.X,
+                mouseLocation.Y - bounds.Y
+            );
+        }
+        
+        public virtual void Drag(Point mouseLocation)
+        {
+            bounds.X = mouseLocation.X - dragOffset.X;
+            bounds.Y = mouseLocation.Y - dragOffset.Y;
+            
+            // Snap to grid
+            bounds.X = (bounds.X / 10) * 10;
+            bounds.Y = (bounds.Y / 10) * 10;
+        }
+        
+        public virtual void StartResize(int handle, Point mouseLocation)
+        {
+            isResizing = true;
+            resizeHandle = handle;
+            dragOffset = mouseLocation;
+        }
+        
+        public virtual void Resize(Point mouseLocation)
+        {
+            if (!isResizing) return;
+
+            int dx = mouseLocation.X - dragOffset.X;
+            int dy = mouseLocation.Y - dragOffset.Y;
+            
+            switch (resizeHandle)
             {
-                SaveDebugInfo("---- Available Paper Sizes ----");
-                
-                // Get the printer settings
-                PrinterSettings settings = printDocument.PrinterSettings;
-                
-                // Log the printer name
-                SaveDebugInfo($"Printer: {settings.PrinterName}");
-                
-                // Check for built-in paper sizes
-                foreach (PaperSize paperSize in settings.PaperSizes)
+                case 0: // Top-left
+                    bounds.X += dx;
+                    bounds.Y += dy;
+                    bounds.Width -= dx;
+                    bounds.Height -= dy;
+                    break;
+                case 1: // Top-right
+                    bounds.Y += dy;
+                    bounds.Width += dx;
+                    bounds.Height -= dy;
+                    break;
+                case 2: // Bottom-right
+                    bounds.Width += dx;
+                    bounds.Height += dy;
+                    break;
+                case 3: // Bottom-left
+                    bounds.X += dx;
+                    bounds.Width -= dx;
+                    bounds.Height += dy;
+                    break;
+            }
+            
+            // Ensure minimum size
+            if (bounds.Width < 20) bounds.Width = 20;
+            if (bounds.Height < 20) bounds.Height = 20;
+            
+            dragOffset = mouseLocation;
+        }
+        
+        public virtual void EndDragOrResize()
+        {
+            isResizing = false;
+            resizeHandle = -1;
+        }
+        
+        public Rectangle[] GetResizeHandles()
+        {
+            const int handleSize = 6;
+            return new Rectangle[]
+            {
+                new Rectangle(bounds.Left - handleSize/2, bounds.Top - handleSize/2, handleSize, handleSize),
+                new Rectangle(bounds.Right - handleSize/2, bounds.Top - handleSize/2, handleSize, handleSize),
+                new Rectangle(bounds.Right - handleSize/2, bounds.Bottom - handleSize/2, handleSize, handleSize),
+                new Rectangle(bounds.Left - handleSize/2, bounds.Bottom - handleSize/2, handleSize, handleSize)
+            };
+        }
+
+        public abstract void Dispose();
+    }
+
+    public class TextElement : LabelElement
+    {
+        private string text;
+        private Font font;
+        private bool autoSize = true;
+
+        public TextElement(string text, Point location, string fontFamily, int fontSize)
+        {
+            this.text = text;
+            this.font = new Font(fontFamily, fontSize);
+            this.bounds = new Rectangle(location, new Size(100, 30));
+            UpdateSize();
+        }
+
+        public string GetText() => text;
+        public string GetFontFamily() => font.FontFamily.Name;
+        public int GetFontSize() => (int)font.Size;
+
+        private void UpdateSize()
+        {
+            if (autoSize)
+            {
+                using (var g = Graphics.FromHwnd(IntPtr.Zero))
                 {
-                    // Convert to mm for easier comparison
-                    float widthMM = paperSize.Width * 0.254f;
-                    float heightMM = paperSize.Height * 0.254f;
+                    var size = g.MeasureString(text, font);
+                    bounds.Size = new Size((int)size.Width + 10, (int)size.Height + 5);
+                }
+            }
+        }
+
+        public override void Draw(Graphics g)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+
+            var format = new StringFormat
+            {
+                Alignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Center,
+                Trimming = StringTrimming.None
+            };
+
+            // Start with a larger font size and scale down until it fits
+            float maxSize = Math.Max(font.Size * 2, 72);  // Allow for larger maximum sizing
+            float minSize = 4;  // Minimum readable size
+            float bestSize = minSize;
+            
+            // Binary search for the right font size
+            while (maxSize - minSize > 0.5f)
+            {
+                float fontSize = (minSize + maxSize) / 2;
+                using (var testFont = new Font(font.FontFamily, fontSize))
+                {
+                    SizeF textSize = g.MeasureString(text, testFont, bounds.Size, format);
                     
-                    SaveDebugInfo($"Paper Size: {paperSize.PaperName}, Kind: {paperSize.Kind}, " +
-                        $"Dimensions: {paperSize.Width/100.0f}\"x{paperSize.Height/100.0f}\" " +
-                        $"({widthMM:F2}mm x {heightMM:F2}mm)");
-                    
-                    // Check if this size is close to 103mm x 164mm
-                    if ((Math.Abs(widthMM - 103) < 1 && Math.Abs(heightMM - 164) < 1) ||
-                        (Math.Abs(widthMM - 164) < 1 && Math.Abs(heightMM - 103) < 1))
+                    // Use a smaller margin to allow text to better fill the space
+                    if (textSize.Width <= bounds.Width - 2 && textSize.Height <= bounds.Height - 2)
                     {
-                        SaveDebugInfo($"*** MATCH FOUND: This paper size closely matches 103mm x 164mm ***");
+                        bestSize = fontSize;
+                        minSize = fontSize;
+                    }
+                    else
+                    {
+                        maxSize = fontSize;
                     }
                 }
-                
-                SaveDebugInfo("---- End of Paper Sizes ----");
+            }
+
+            // Use the best fitting size found
+            using (var scaledFont = new Font(font.FontFamily, bestSize))
+            {
+                g.DrawString(text, scaledFont, Brushes.Black, bounds, format);
+            }
+        }
+
+        public override void Dispose()
+        {
+            font?.Dispose();
+        }
+    }
+
+    public class ImageElement : LabelElement
+    {
+        private Image image;
+        private bool maintainAspectRatio = true;
+        private string imagePath;
+
+        public ImageElement(string imagePath, Point location)
+        {
+            this.imagePath = imagePath;
+            try
+            {
+                image = Image.FromFile(imagePath);
+                float ratio = (float)image.Width / image.Height;
+                bounds = new Rectangle(location, new Size((int)(100 * ratio), 100));
             }
             catch (Exception ex)
             {
-                SaveDebugInfo($"Error getting paper sizes: {ex.Message}");
                 // Log error but continue with a default size for the element
                 Console.WriteLine($"Error loading image in ImageElement: {ex.Message}");
                 bounds = new Rectangle(location, new Size(100, 100));
@@ -3004,24 +3038,87 @@ namespace PrintSystem.Dialogs
         private Image qrImage;
         private string templateKey;
         private string templateContent;
+        private Bitmap originalBitmap;  // Store the original high resolution bitmap
 
         public QRElement(Image qrImage, Point location, string templateKey = null, string templateContent = null)
         {
-            this.qrImage = qrImage;
             this.templateKey = templateKey;
             this.templateContent = templateContent;
+            
+            // Store high-resolution bitmap for better quality rendering
+            if (qrImage is Bitmap bmp)
+            {
+                try
+                {
+                    // Create a deep copy of the bitmap with the same pixel format
+                    Rectangle rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
+                    this.originalBitmap = bmp.Clone(rect, bmp.PixelFormat);
+                    this.qrImage = new Bitmap(this.originalBitmap);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error cloning bitmap: {ex.Message}");
+                    // Fallback method if clone fails
+                    this.originalBitmap = new Bitmap(bmp.Width, bmp.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                    using (Graphics g = Graphics.FromImage(this.originalBitmap))
+                    {
+                        g.DrawImage(bmp, 0, 0, bmp.Width, bmp.Height);
+                    }
+                    this.qrImage = new Bitmap(this.originalBitmap);
+                }
+            }
+            else if (qrImage != null)
+            {
+                try
+                {
+                    // Convert to bitmap if it isn't already
+                    this.originalBitmap = new Bitmap(qrImage.Width, qrImage.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                    using (Graphics g = Graphics.FromImage(this.originalBitmap))
+                    {
+                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        g.DrawImage(qrImage, 0, 0, qrImage.Width, qrImage.Height);
+                    }
+                    this.qrImage = new Bitmap(this.originalBitmap);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error creating bitmap from image: {ex.Message}");
+                    // If all else fails, create a new blank bitmap
+                    int size = Math.Max(qrImage.Width, qrImage.Height);
+                    this.originalBitmap = new Bitmap(size, size);
+                    this.qrImage = new Bitmap(size, size);
+                }
+            }
+            
             // QR codes should be square
             bounds = new Rectangle(location, new Size(100, 100));
         }
 
         public string GetTemplateKey() => templateKey;
         public string GetTemplateContent() => templateContent;
+        
+        // Get the original high-res bitmap for printing
+        public Bitmap GetOriginalBitmap() => originalBitmap;
 
         public override void Draw(Graphics g)
         {
             if (qrImage != null)
             {
+                // Set high quality drawing for the QR code
+                var oldMode = g.InterpolationMode;
+                var oldPixelMode = g.PixelOffsetMode;
+                var oldCompositeMode = g.CompositingQuality;
+                
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.CompositingQuality = CompositingQuality.HighQuality;
+                
                 g.DrawImage(qrImage, bounds);
+                
+                // Restore previous graphic settings
+                g.InterpolationMode = oldMode;
+                g.PixelOffsetMode = oldPixelMode;
+                g.CompositingQuality = oldCompositeMode;
             }
         }
 
@@ -3034,6 +3131,7 @@ namespace PrintSystem.Dialogs
 
         public override void Dispose()
         {
+            originalBitmap?.Dispose();
             qrImage?.Dispose();
         }
     }

@@ -2,6 +2,7 @@ using System;
 using System.Windows.Forms;
 using System.Drawing;
 using System.Drawing.Printing;
+using System.Drawing.Drawing2D;
 using System.Linq;
 using System.Text;
 using PrintSystem.Models;
@@ -9,6 +10,7 @@ using PrintSystem.Managers;
 using ZXing;
 using ZXing.QrCode;
 using ZXing.Windows.Compatibility;
+using ZXing.Rendering;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -638,24 +640,61 @@ namespace PrintSystem.Dialogs
                     return;
                 }
 
-                var writer = new BarcodeWriter
+                var writer = new BarcodeWriter<Bitmap>
                 {
                     Format = BarcodeFormat.QR_CODE,
                     Options = new QrCodeEncodingOptions
                     {
-                        Width = GetQRCodeSize(),
-                        Height = GetQRCodeSize(),
+                        Width = GetQRCodeSize() * 4,  // Increased size for higher quality
+                        Height = GetQRCodeSize() * 4, // Increased size for higher quality
                         Margin = 1,
                         ErrorCorrection = GetErrorCorrectionLevel()
+                    },
+                    Renderer = new BitmapRenderer
+                    {
+                        // Specify explicit colors for better contrast
+                        Background = Color.White,
+                        Foreground = Color.Black
                     }
                 };
 
                 if (qrPreview.Image != null)
                 {
                     qrPreview.Image.Dispose();
+                    qrPreview.Image = null;
                 }
 
-                qrPreview.Image = writer.Write(content);
+                // Generate the QR code bitmap
+                var tempQrBitmap = writer.Write(content);
+                
+                // Create a high-quality copy with proper pixel format
+                using (var highQualityBitmap = new Bitmap(tempQrBitmap.Width, tempQrBitmap.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+                {
+                    using (var g = Graphics.FromImage(highQualityBitmap))
+                    {
+                        // Configure high-quality drawing
+                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                        g.CompositingQuality = CompositingQuality.HighQuality;
+                        g.SmoothingMode = SmoothingMode.AntiAlias;
+                        
+                        // Clear with explicit white background
+                        g.Clear(Color.White);
+                        
+                        // Draw the QR code with high quality
+                        g.DrawImage(tempQrBitmap, 0, 0, tempQrBitmap.Width, tempQrBitmap.Height);
+                    }
+                    
+                    // Create final bitmap to display
+                    qrPreview.Image = new Bitmap(highQualityBitmap);
+                }
+                
+                // Dispose the temporary bitmap
+                tempQrBitmap.Dispose();
+                
+                // Set proper display mode
+                qrPreview.SizeMode = PictureBoxSizeMode.Zoom;
+                
                 previewLabel.Text = $"Size: {content.Length} characters";
             }
             catch (Exception ex)
@@ -767,87 +806,149 @@ namespace PrintSystem.Dialogs
                     var printDocument = new PrintDocument();
                     printDocument.DocumentName = $"QR Code - {currentItem?.ModelNumber ?? "Custom"}";
                     
-                    // Set the PrintDocument to the PrintDialog
-                    printDialog.Document = printDocument;
-                    
-                    // Store a local reference to the QR image to avoid threading issues
-                    var qrImageToPrint = qrPreview.Image;
-                    
-                    // Handle the printing
-                    printDocument.PrintPage += (sender, e) => 
+                    // Set default printer if configured
+                    var settings = SettingsManager.GetSettings();
+                    if (!string.IsNullOrEmpty(settings.DefaultLabelPrinter))
                     {
-                        // Calculate print area
-                        float pageWidth = e.PageSettings.PrintableArea.Width;
-                        float pageHeight = e.PageSettings.PrintableArea.Height;
-                        
-                        // Set high quality rendering
-                        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                        e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                        e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
-                        
-                        // Calculate centering positions
-                        float xPos = (pageWidth - qrImageToPrint.Width) / 2;
-                        float yPos = (pageHeight - qrImageToPrint.Height) / 2;
-                        
-                        // Ensure the QR code is at least 1 inch in size
-                        float minSize = 100f; // 1 inch = 100 units at 100 DPI
-                        float maxSize = Math.Min(pageWidth * 0.8f, pageHeight * 0.8f); // 80% of the page
-                        
-                        float qrSize = Math.Max(minSize, Math.Min(maxSize, 300f)); // Default to 3 inches, but within bounds
-                        
-                        // Create a destination rectangle that centers the QR code on the page
-                        RectangleF destRect = new RectangleF(
-                            (pageWidth - qrSize) / 2,
-                            (pageHeight - qrSize) / 2,
-                            qrSize,
-                            qrSize
-                        );
-                        
-                        // Draw the QR code
-                        e.Graphics.DrawImage(qrImageToPrint, destRect);
-                        
-                        // Add content info below the QR code
-                        if (contentTextBox.Text.Length > 0)
+                        try
                         {
-                            string displayText = contentTextBox.Text;
-                            if (displayText.Length > 50)
+                            // Check if the printer exists
+                            bool printerExists = false;
+                            foreach (string printer in PrinterSettings.InstalledPrinters)
                             {
-                                displayText = displayText.Substring(0, 47) + "...";
+                                if (printer == settings.DefaultLabelPrinter)
+                                {
+                                    printerExists = true;
+                                    break;
+                                }
                             }
                             
-                            using (Font font = new Font("Arial", 8))
+                            if (printerExists)
                             {
-                                RectangleF textRect = new RectangleF(
-                                    (pageWidth - qrSize) / 2,
-                                    destRect.Bottom + 10,
-                                    qrSize,
-                                    40
-                                );
-                                
-                                StringFormat format = new StringFormat
-                                {
-                                    Alignment = StringAlignment.Center,
-                                    LineAlignment = StringAlignment.Near
-                                };
-                                
-                                e.Graphics.DrawString(displayText, font, Brushes.Black, textRect, format);
+                                printDocument.PrinterSettings.PrinterName = settings.DefaultLabelPrinter;
+                                Console.WriteLine($"Using default label printer: {settings.DefaultLabelPrinter}");
+                            }
+                            else
+                            {
+                                Console.WriteLine($"Configured printer '{settings.DefaultLabelPrinter}' not found");
                             }
                         }
-                        
-                        // No more pages
-                        e.HasMorePages = false;
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error setting printer: {ex.Message}");
+                        }
+                    }
+                    
+                    // Set up the print document
+                    printDialog.Document = printDocument;
+                    
+                    printDocument.PrintPage += (s, pe) =>
+                    {
+                        try
+                        {
+                            // Get the original image to print
+                            Image originalImage = qrPreview.Image;
+                            
+                            // Create a high-quality intermediate bitmap to ensure proper printing
+                            using (var highQualityBitmap = new Bitmap(originalImage.Width, originalImage.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+                            {
+                                using (var g = Graphics.FromImage(highQualityBitmap))
+                                {
+                                    // Configure high-quality drawing for the intermediate bitmap
+                                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                                    g.CompositingQuality = CompositingQuality.HighQuality;
+                                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                                    
+                                    // Draw with explicit white background
+                                    g.Clear(Color.White);
+                                    
+                                    // Draw the original QR image with high quality
+                                    g.DrawImage(originalImage, 0, 0, originalImage.Width, originalImage.Height);
+                                }
+                                
+                                // Calculate aspect ratio
+                                float ratio = (float)highQualityBitmap.Width / (float)highQualityBitmap.Height;
+                                
+                                // Calculate the print area
+                                int printWidth = Math.Min(pe.MarginBounds.Width, (int)(pe.MarginBounds.Height * ratio));
+                                int printHeight = Math.Min(pe.MarginBounds.Height, (int)(pe.MarginBounds.Width / ratio));
+                                
+                                // Center the image on the page
+                                int x = pe.MarginBounds.Left + ((pe.MarginBounds.Width - printWidth) / 2);
+                                int y = pe.MarginBounds.Top + ((pe.MarginBounds.Height - printHeight) / 2);
+                                
+                                // Create a rectangle for the image
+                                Rectangle destRect = new Rectangle(x, y, printWidth, printHeight);
+                                
+                                // Configure high-quality drawing for the print graphics
+                                pe.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                                pe.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                                pe.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                                pe.Graphics.CompositingQuality = CompositingQuality.HighQuality;
+                                
+                                // Use a proper method to set up the page
+                                pe.Graphics.PageUnit = GraphicsUnit.Display;
+                                pe.Graphics.Clear(Color.White);
+                                
+                                // Draw the high-quality bitmap to the printer
+                                pe.Graphics.DrawImage(highQualityBitmap, destRect);
+                            }
+                            
+                            // No more pages to print
+                            pe.HasMorePages = false;
+                        }
+                        catch (Exception printEx)
+                        {
+                            Console.WriteLine($"Error during print rendering: {printEx.Message}");
+                            
+                            // Fallback to direct printing if the high-quality approach fails
+                            try
+                            {
+                                Image imgToPrint = qrPreview.Image;
+                                
+                                // Calculate aspect ratio
+                                float ratio = (float)imgToPrint.Width / (float)imgToPrint.Height;
+                                
+                                // Calculate the print area
+                                int printWidth = Math.Min(pe.MarginBounds.Width, (int)(pe.MarginBounds.Height * ratio));
+                                int printHeight = Math.Min(pe.MarginBounds.Height, (int)(pe.MarginBounds.Width / ratio));
+                                
+                                // Center the image on the page
+                                int x = pe.MarginBounds.Left + ((pe.MarginBounds.Width - printWidth) / 2);
+                                int y = pe.MarginBounds.Top + ((pe.MarginBounds.Height - printHeight) / 2);
+                                
+                                // Create a rectangle for the image
+                                Rectangle destRect = new Rectangle(x, y, printWidth, printHeight);
+                                
+                                // Draw the image directly
+                                pe.Graphics.DrawImage(imgToPrint, destRect);
+                            }
+                            catch (Exception fallbackEx)
+                            {
+                                Console.WriteLine($"Fallback printing also failed: {fallbackEx.Message}");
+                            }
+                            
+                            pe.HasMorePages = false;
+                        }
                     };
                     
                     // Show the print dialog
                     if (printDialog.ShowDialog() == DialogResult.OK)
                     {
-                        printDocument.Print();
-                        MessageBox.Show("QR code sent to printer!", "Print Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        try
+                        {
+                            printDocument.Print();
+                        }
+                        catch (Exception ex)
+                        {
+                            MessageBox.Show($"Error printing: {ex.Message}", "Print Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show($"Error during print operation: {ex.Message}", "Print Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show($"Error preparing to print: {ex.Message}", "Print Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
         }

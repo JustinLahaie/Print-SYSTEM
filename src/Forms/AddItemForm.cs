@@ -1,6 +1,7 @@
 using System;
 using System.Windows.Forms;
 using System.Drawing;
+using System.Drawing.Printing;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -775,20 +776,101 @@ namespace PrintSystem.Forms
                 LogDebug($"Creating label preview for item: {item.ModelNumber}");
                 labelBuilderDialog = new LabelBuilderDialog(item);
 
-                // Get the PrintButton_Click method using reflection
-                var printButtonClickMethod = labelBuilderDialog.GetType().GetMethod("PrintButton_Click", 
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                // We're no longer using reflection to invoke PrintButton_Click because it doesn't
+                // properly use the selected printer. Instead, we'll create our own print preview
+                // that uses the default printer from settings.
                 
-                if (printButtonClickMethod != null)
+                // Create a PrintDocument
+                var printDocument = new PrintDocument();
+                printDocument.DocumentName = $"Label - {item.ModelNumber}";
+                
+                // Get settings
+                var settings = SettingsManager.GetSettings();
+                
+                // Set the default printer if configured
+                if (!string.IsNullOrEmpty(settings.DefaultLabelPrinter))
                 {
-                    // Invoke the print preview with empty EventArgs
-                    LogDebug("Invoking PrintButton_Click via reflection");
-                    printButtonClickMethod.Invoke(labelBuilderDialog, new object[] { null, EventArgs.Empty });
+                    try
+                    {
+                        bool printerExists = false;
+                        foreach (string printer in PrinterSettings.InstalledPrinters)
+                        {
+                            if (printer == settings.DefaultLabelPrinter)
+                            {
+                                printerExists = true;
+                                break;
+                            }
+                        }
+                        
+                        if (printerExists)
+                        {
+                            LogDebug($"Using default label printer from settings: {settings.DefaultLabelPrinter}");
+                            printDocument.PrinterSettings.PrinterName = settings.DefaultLabelPrinter;
+                        }
+                        else
+                        {
+                            LogDebug($"Configured printer '{settings.DefaultLabelPrinter}' not found");
+                        }
+                    }
+                    catch (Exception printerEx)
+                    {
+                        LogDebug($"Error setting printer: {printerEx.Message}");
+                    }
                 }
-                else
+                
+                // Create PrintPreviewDialog
+                using (var printPreviewDialog = new PrintPreviewDialog())
                 {
-                    LogDebug("Could not find PrintButton_Click method via reflection");
-                    MessageBox.Show("Could not generate label preview.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    // Set up print preview dialog
+                    printPreviewDialog.Document = printDocument;
+                    printPreviewDialog.StartPosition = FormStartPosition.CenterScreen;
+                    printPreviewDialog.Width = 800;
+                    printPreviewDialog.Height = 600;
+                    
+                    // Set PrintPage event handler
+                    printDocument.PrintPage += (sender, e) =>
+                    {
+                        // Call the label builder dialog's method to render the label
+                        // We'll use reflection to get the required methods and data
+                        try
+                        {
+                            // Get the label elements from the dialog
+                            var elementsField = labelBuilderDialog.GetType().GetField("labelElements", 
+                                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                            
+                            if (elementsField != null)
+                            {
+                                var elements = elementsField.GetValue(labelBuilderDialog) as IEnumerable<object>;
+                                if (elements != null)
+                                {
+                                    LogDebug($"Got {elements.Count()} label elements for rendering");
+                                    
+                                    // Call our rendering method
+                                    RenderLabelToGraphics(e.Graphics, item, elements);
+                                }
+                                else
+                                {
+                                    LogDebug("Failed to get label elements (null)");
+                                }
+                            }
+                            else
+                            {
+                                LogDebug("Failed to get labelElements field via reflection");
+                            }
+                        }
+                        catch (Exception renderEx)
+                        {
+                            LogDebug($"Error rendering label: {renderEx.Message}");
+                            if (renderEx.InnerException != null)
+                            {
+                                LogDebug($"Inner exception: {renderEx.InnerException.Message}");
+                            }
+                        }
+                    };
+                    
+                    // Show the print preview dialog
+                    LogDebug("Showing print preview dialog");
+                    printPreviewDialog.ShowDialog();
                 }
             }
             catch (Exception ex)
@@ -803,259 +885,266 @@ namespace PrintSystem.Forms
                     LogDebug($"Inner exception: {realException.Message}");
                 }
                 
-                MessageBox.Show($"Error generating label preview: {realException.Message}", 
-                    "Preview Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"Error creating label preview: {realException.Message}", "Preview Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
-                // Ensure the dialog is properly disposed
-                if (labelBuilderDialog != null)
-                {
-                    try
-                    {
-                        labelBuilderDialog.Dispose();
-                        LogDebug("Label builder dialog disposed");
-                    }
-                    catch (Exception disposeEx)
-                    {
-                        LogDebug($"Error disposing label builder dialog: {disposeEx.Message}");
-                    }
-                }
+                // Dispose the dialog if it was created
+                labelBuilderDialog?.Dispose();
             }
         }
         
-        private void RenderLabelPreview(Graphics g, Panel paper, Item item, System.Collections.IEnumerable elements)
+        private void RenderLabelToGraphics(Graphics g, Item item, IEnumerable<object> elements)
         {
+            LogDebug("Rendering label to graphics");
+            
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             
-            if (elements == null)
-            {
-                LogDebug("RenderLabelPreview: No elements to render (elements collection is null)");
-                return;
-            }
-            
-            LogDebug($"RenderLabelPreview: Starting to render label for item: {item?.ModelNumber ?? "Unknown"}");
-            LogDebug($"RenderLabelPreview: Image path for item: {item?.ImagePath ?? "None"}");
-
-            int elementCount = 0;
-            
-            // Process each element in the template
             foreach (var element in elements)
             {
-                elementCount++;
                 try
                 {
-                    var typeProperty = element.GetType().GetProperty("Type");
+                    // Get the element's bounds
                     var boundsProperty = element.GetType().GetProperty("Bounds");
-                    var contentProperty = element.GetType().GetProperty("Content");
-                    var fontFamilyProperty = element.GetType().GetProperty("FontFamily");
-                    var fontSizeProperty = element.GetType().GetProperty("FontSize");
-                    var qrTemplateKeyProperty = element.GetType().GetProperty("QRTemplateKey");
+                    if (boundsProperty == null) continue;
                     
-                    string type = (string)typeProperty?.GetValue(element);
-                    Rectangle bounds = (Rectangle)boundsProperty?.GetValue(element);
-                    string content = (string)contentProperty?.GetValue(element);
+                    Rectangle bounds = (Rectangle)boundsProperty.GetValue(element);
                     
-                    LogDebug($"RenderLabelPreview: Processing element {elementCount} - Type: {type ?? "null"}, Content: {content ?? "null"}");
+                    // Determine element type and render accordingly
+                    string typeName = element.GetType().Name;
+                    LogDebug($"Rendering element of type {typeName}");
                     
-                    // Convert from template space to preview space
-                    // The original bounds from the template include the MARGIN (40px) offset
-                    // We need to subtract this MARGIN to correctly position elements in the preview
-                    const int DESIGN_MARGIN = 40; // Same as MARGIN in LabelBuilderDialog
-                    Rectangle adjustedBounds = new Rectangle(
-                        bounds.X - DESIGN_MARGIN,
-                        bounds.Y - DESIGN_MARGIN,
-                        bounds.Width,
-                        bounds.Height
-                    );
-                    
-                    // Ensure bounds remain within the paper area
-                    if (adjustedBounds.X < 0) adjustedBounds.X = 0;
-                    if (adjustedBounds.Y < 0) adjustedBounds.Y = 0;
-                    if (adjustedBounds.Right > paper.Width) adjustedBounds.Width = paper.Width - adjustedBounds.X;
-                    if (adjustedBounds.Bottom > paper.Height) adjustedBounds.Height = paper.Height - adjustedBounds.Y;
-                    
-                    switch (type)
+                    if (typeName == "TextElement")
                     {
-                        case "Text":
-                            // Replace placeholders with actual values
-                            string text = ReplaceItemPlaceholders(content, item);
+                        // Get text content
+                        var getTextMethod = element.GetType().GetMethod("GetText");
+                        var getFontFamilyMethod = element.GetType().GetMethod("GetFontFamily");
+                        var getFontSizeMethod = element.GetType().GetMethod("GetFontSize");
+                        
+                        if (getTextMethod != null && getFontFamilyMethod != null && getFontSizeMethod != null)
+                        {
+                            string text = (string)getTextMethod.Invoke(element, null);
+                            string fontFamily = (string)getFontFamilyMethod.Invoke(element, null);
+                            int fontSize = (int)getFontSizeMethod.Invoke(element, null);
                             
-                            string fontFamily = (string)fontFamilyProperty?.GetValue(element) ?? "Arial";
-                            float fontSize = Convert.ToSingle(fontSizeProperty?.GetValue(element) ?? 10f);
+                            // Replace placeholders
+                            text = ReplaceItemPlaceholders(text, item);
                             
+                            // Create font and draw text
                             using (var font = new Font(fontFamily, fontSize))
                             {
-                                var format = new StringFormat
-                                {
-                                    Alignment = StringAlignment.Center,
-                                    LineAlignment = StringAlignment.Center
-                                };
-                                g.DrawString(text, font, Brushes.Black, adjustedBounds, format);
+                                g.DrawString(text, font, Brushes.Black, bounds);
                             }
-                            break;
-                            
-                        case "QR":
-                            // Get QR content - try to get from QRTemplateKey first
-                            string qrTemplateKey = (string)qrTemplateKeyProperty?.GetValue(element);
-                            string qrContent;
-                            
-                            if (!string.IsNullOrEmpty(qrTemplateKey))
+                        }
+                    }
+                    else if (typeName == "QRElement")
+                    {
+                        // Get QR content and generate a proper QR code instead of just a placeholder
+                        var getTemplateContentMethod = element.GetType().GetMethod("GetTemplateContent");
+                        var getTemplateKeyMethod = element.GetType().GetMethod("GetTemplateKey");
+                        var getOriginalBitmapMethod = element.GetType().GetMethod("GetOriginalBitmap");
+                        
+                        try
+                        {
+                            // First try to use the original high-resolution bitmap if available
+                            if (getOriginalBitmapMethod != null)
                             {
-                                // This is a reference to a stored QR template
-                                LogDebug($"Using QR template key: {qrTemplateKey}");
-                                
-                                // Get the QR templates file path
-                                string qrTemplatesFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "qr_templates.json");
-                                Dictionary<string, string> qrTemplates = new Dictionary<string, string>();
-                                
-                                // Try to load QR templates
-                                if (File.Exists(qrTemplatesFile))
+                                var originalBitmap = getOriginalBitmapMethod.Invoke(element, null) as Bitmap;
+                                if (originalBitmap != null)
                                 {
-                                    try
-                                    {
-                                        string json = File.ReadAllText(qrTemplatesFile);
-                                        qrTemplates = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        LogDebug($"Error loading QR templates: {ex.Message}");
-                                    }
+                                    // Use high quality settings
+                                    var oldInterpolationMode = g.InterpolationMode;
+                                    var oldPixelOffsetMode = g.PixelOffsetMode;
+                                    var oldCompositingQuality = g.CompositingQuality;
+                                    var oldSmoothingMode = g.SmoothingMode;
+                                    
+                                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                                    g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                                    g.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
+                                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                                    
+                                    // Draw the bitmap using high quality settings
+                                    g.DrawImage(originalBitmap, bounds);
+                                    
+                                    // Restore original graphics settings
+                                    g.InterpolationMode = oldInterpolationMode;
+                                    g.PixelOffsetMode = oldPixelOffsetMode;
+                                    g.CompositingQuality = oldCompositingQuality;
+                                    g.SmoothingMode = oldSmoothingMode;
+                                    
+                                    LogDebug("Drew QR code from original bitmap");
+                                    continue; // Skip the rest of this iteration
                                 }
-                                
-                                // Get the template content
-                                if (qrTemplates.TryGetValue(qrTemplateKey, out string templateContent))
-                                {
-                                    qrContent = templateContent;
-                                }
-                                else
-                                {
-                                    // Handle built-in templates
-                                    qrContent = qrTemplateKey switch
-                                    {
-                                        "Basic Info" => "Model: {ModelNumber} | Description: {Description}",
-                                        "Full Details" => "Model: {ModelNumber}"
-                                            + " | Description: {Description}"
-                                            + " | Supplier: {Supplier}"
-                                            + " | Category: {Category}"
-                                            + " | Order Qty: {DefaultOrderQuantity}"
-                                            + " | URL: {ProductURL}",
-                                        "URL Only" => "{ProductURL}",
-                                        _ => content // Fall back to content field
-                                    };
-                                }
+                            }
+                            
+                            // If no original bitmap, generate a new QR code
+                            string qrContent = null;
+                            
+                            if (getTemplateContentMethod != null)
+                            {
+                                qrContent = getTemplateContentMethod.Invoke(element, null) as string;
+                            }
+                            
+                            // If no template content, try to create a default QR code content
+                            if (string.IsNullOrEmpty(qrContent))
+                            {
+                                qrContent = $"Model: {item?.ModelNumber ?? ""} | Description: {item?.Description ?? ""}";
+                                LogDebug("Using default QR content");
                             }
                             else
                             {
-                                // Use the content field directly
-                                qrContent = content;
+                                // Replace placeholders in the content
+                                qrContent = ReplaceItemPlaceholders(qrContent, item);
                             }
                             
-                            // Replace placeholders with actual values
-                            qrContent = ReplaceItemPlaceholders(qrContent, item);
-                            
-                            // Generate QR code
-                            try
+                            // Generate the QR code
+                            var writer = new ZXing.Windows.Compatibility.BarcodeWriter
                             {
-                                var writer = new ZXing.BarcodeWriter<Bitmap>
+                                Format = ZXing.BarcodeFormat.QR_CODE,
+                                Options = new ZXing.QrCode.QrCodeEncodingOptions
                                 {
-                                    Format = ZXing.BarcodeFormat.QR_CODE,
-                                    Options = new ZXing.QrCode.QrCodeEncodingOptions
-                                    {
-                                        Width = adjustedBounds.Width,
-                                        Height = adjustedBounds.Height,
-                                        Margin = 1,
-                                        ErrorCorrection = ZXing.QrCode.Internal.ErrorCorrectionLevel.M
-                                    },
-                                    Renderer = new BitmapRenderer()
-                                };
+                                    Width = Math.Max(600, bounds.Width * 4),  // High resolution
+                                    Height = Math.Max(600, bounds.Height * 4), // High resolution
+                                    Margin = 1,
+                                    ErrorCorrection = ZXing.QrCode.Internal.ErrorCorrectionLevel.M
+                                },
+                                Renderer = new ZXing.Windows.Compatibility.BitmapRenderer
+                                {
+                                    Background = Color.White,
+                                    Foreground = Color.Black
+                                }
+                            };
 
-                                using (var qrImage = writer.Write(qrContent))
+                            // Generate QR code
+                            using (var qrBitmap = writer.Write(qrContent))
+                            {
+                                // Use high quality settings for drawing
+                                var oldInterpolationMode = g.InterpolationMode;
+                                var oldPixelOffsetMode = g.PixelOffsetMode;
+                                var oldCompositingQuality = g.CompositingQuality;
+                                var oldSmoothingMode = g.SmoothingMode;
+                                
+                                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                                g.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
+                                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                                
+                                // Draw the QR code
+                                g.DrawImage(qrBitmap, bounds);
+                                
+                                // Restore original graphics settings
+                                g.InterpolationMode = oldInterpolationMode;
+                                g.PixelOffsetMode = oldPixelOffsetMode;
+                                g.CompositingQuality = oldCompositingQuality;
+                                g.SmoothingMode = oldSmoothingMode;
+                                
+                                LogDebug("Generated and drew new QR code");
+                            }
+                        }
+                        catch (Exception qrEx)
+                        {
+                            LogDebug($"Error generating QR code: {qrEx.Message}");
+                            
+                            // Fallback to placeholder as before
+                            g.FillRectangle(Brushes.White, bounds);
+                            g.DrawRectangle(Pens.Black, bounds);
+                            
+                            // Draw a QR code placeholder
+                            int size = Math.Min(bounds.Width, bounds.Height);
+                            int x = bounds.X + (bounds.Width - size) / 2;
+                            int y = bounds.Y + (bounds.Height - size) / 2;
+                            g.DrawRectangle(Pens.Black, x, y, size, size);
+                            
+                            // Draw a pattern inside to represent QR code
+                            int cellSize = size / 10;
+                            for (int i = 0; i < 10; i++)
+                            {
+                                for (int j = 0; j < 10; j++)
                                 {
-                                    g.DrawImage(qrImage, adjustedBounds);
+                                    if ((i + j) % 2 == 0)
+                                    {
+                                        g.FillRectangle(Brushes.Black, x + i * cellSize, y + j * cellSize, cellSize, cellSize);
+                                    }
                                 }
                             }
-                            catch (Exception ex)
+                        }
+                    }
+                    else if (typeName == "ImageElement")
+                    {
+                        // Get image path
+                        var getImagePathMethod = element.GetType().GetMethod("GetImagePath");
+                        if (getImagePathMethod != null)
+                        {
+                            string imagePath = (string)getImagePathMethod.Invoke(element, null);
+                            
+                            // If there's no image path or if it's a placeholder, use the item's image path
+                            if (string.IsNullOrEmpty(imagePath) || !File.Exists(imagePath))
                             {
-                                LogDebug($"Error generating QR code: {ex.Message}");
+                                if (!string.IsNullOrEmpty(item.ImagePath) && File.Exists(item.ImagePath))
+                                {
+                                    imagePath = item.ImagePath;
+                                }
                             }
-                            break;
                             
-                        case "Image":
-                            // Apply placeholder replacement to content first (in case it contains placeholders)
-                            string replacedContent = ReplaceItemPlaceholders(content, item);
-                            string imagePath = !string.IsNullOrEmpty(item.ImagePath) ? item.ImagePath : replacedContent;
-                            
-                            LogDebug($"Attempting to load image from path: {imagePath}");
-                            
-                            bool imageRendered = false;
+                            // Draw the image if the path exists
                             if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
                             {
                                 try
                                 {
                                     using (var image = Image.FromFile(imagePath))
                                     {
-                                        g.DrawImage(image, adjustedBounds);
-                                        LogDebug($"Successfully rendered image from: {imagePath}");
-                                        imageRendered = true;
+                                        g.DrawImage(image, bounds);
                                     }
                                 }
-                                catch (Exception ex)
+                                catch (Exception imgEx)
                                 {
-                                    LogDebug($"Error loading image: {ex.Message}");
+                                    LogDebug($"Error loading image {imagePath}: {imgEx.Message}");
+                                    
+                                    // Draw a placeholder for the image
+                                    g.FillRectangle(Brushes.LightGray, bounds);
+                                    g.DrawRectangle(Pens.Gray, bounds);
+                                    
+                                    // Draw X across the rectangle
+                                    g.DrawLine(Pens.Gray, bounds.Left, bounds.Top, bounds.Right, bounds.Bottom);
+                                    g.DrawLine(Pens.Gray, bounds.Right, bounds.Top, bounds.Left, bounds.Bottom);
+                                    
+                                    // Draw text
+                                    using (var font = new Font("Arial", 8))
+                                    {
+                                        string errorText = "Image Error";
+                                        SizeF textSize = g.MeasureString(errorText, font);
+                                        float x = bounds.Left + (bounds.Width - textSize.Width) / 2;
+                                        float y = bounds.Top + (bounds.Height - textSize.Height) / 2;
+                                        g.DrawString(errorText, font, Brushes.Red, x, y);
+                                    }
                                 }
                             }
                             else
                             {
-                                // Log why the image is not being displayed
-                                if (string.IsNullOrEmpty(imagePath))
-                                {
-                                    LogDebug("Image not displayed: Path is empty");
-                                }
-                                else if (!File.Exists(imagePath))
-                                {
-                                    LogDebug($"Image not displayed: File does not exist at path: {imagePath}");
-                                }
+                                // Draw a placeholder for the image
+                                g.FillRectangle(Brushes.LightGray, bounds);
+                                g.DrawRectangle(Pens.Gray, bounds);
+                                
+                                // Draw image icon
+                                int iconSize = Math.Min(bounds.Width, bounds.Height) / 2;
+                                int x = bounds.X + (bounds.Width - iconSize) / 2;
+                                int y = bounds.Y + (bounds.Height - iconSize) / 2;
+                                
+                                // Draw a simple image icon
+                                g.FillRectangle(Brushes.White, x, y, iconSize, iconSize);
+                                g.DrawRectangle(Pens.Black, x, y, iconSize, iconSize);
+                                g.FillEllipse(Brushes.Yellow, x + iconSize/4, y + iconSize/4, iconSize/2, iconSize/2);
                             }
-                            
-                            // If image couldn't be rendered, draw a placeholder rectangle with text
-                            if (!imageRendered)
-                            {
-                                // Draw a placeholder rectangle
-                                using (var pen = new Pen(Color.Gray, 2))
-                                {
-                                    pen.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash;
-                                    g.DrawRectangle(pen, adjustedBounds);
-                                    
-                                    // Draw placeholder text
-                                    using (var font = new Font("Arial", 8))
-                                    {
-                                        var textRect = new Rectangle(
-                                            adjustedBounds.X + 5,
-                                            adjustedBounds.Y + 5,
-                                            adjustedBounds.Width - 10,
-                                            adjustedBounds.Height - 10
-                                        );
-                                        
-                                        var format = new StringFormat
-                                        {
-                                            Alignment = StringAlignment.Center,
-                                            LineAlignment = StringAlignment.Center
-                                        };
-                                        
-                                        g.DrawString("No Image Available", font, Brushes.Gray, textRect, format);
-                                    }
-                                }
-                                LogDebug("Drew placeholder rectangle for missing image");
-                            }
-                            break;
+                        }
                     }
                 }
-                catch (Exception ex)
+                catch (Exception elemEx)
                 {
-                    LogDebug($"Error rendering element: {ex.Message}");
+                    LogDebug($"Error rendering element: {elemEx.Message}");
                 }
             }
+            
+            LogDebug("Finished rendering label");
         }
         
         private string ReplaceItemPlaceholders(string text, Item item)
