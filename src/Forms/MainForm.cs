@@ -236,11 +236,12 @@ namespace PrintSystem.Forms
         {
             using (var settingsDialog = new CategorySettingsDialog())
             {
+                settingsDialog.Owner = this;  // Set this MainForm as the owner
                 var result = settingsDialog.ShowDialog();
                 if (result == DialogResult.OK)
                 {
-                    // Force a refresh of the categories from disk
-                    CategoryManager.ReloadCategories();
+                    // Just refresh the tree view without reloading categories from disk
+                    // This prevents losing in-memory changes that might not have been saved to disk yet
                     RefreshTreeView();
                 }
             }

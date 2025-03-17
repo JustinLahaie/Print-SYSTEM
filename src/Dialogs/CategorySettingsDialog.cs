@@ -6,6 +6,7 @@ using System.Linq;
 using System.Collections.Generic;
 using PrintSystem.Models;
 using PrintSystem.Managers;
+using PrintSystem.Forms;
 using CategoryManager = PrintSystem.Managers.CategoryManager;
 
 namespace PrintSystem.Dialogs
@@ -28,7 +29,6 @@ namespace PrintSystem.Dialogs
     {
         private TreeView categoryTreeView;
         private Button addCategoryButton;
-        private Button addSubcategoryButton;
         private Button editButton;
         private Button deleteButton;
         private PictureBox imagePreview;
@@ -97,25 +97,16 @@ namespace PrintSystem.Dialogs
             };
             addCategoryButton.Click += AddCategoryButton_Click;
 
-            addSubcategoryButton = new Button
-            {
-                Text = "Add Sub",
-                Width = 90,
-                Location = new Point(95, 5),
-                Enabled = false
-            };
-            addSubcategoryButton.Click += AddSubcategoryButton_Click;
-
             deleteButton = new Button
             {
                 Text = "Delete",
                 Width = 90,
-                Location = new Point(190, 5),
+                Location = new Point(95, 5),
                 Enabled = false
             };
             deleteButton.Click += DeleteButton_Click;
 
-            buttonPanel.Controls.AddRange(new Control[] { addCategoryButton, addSubcategoryButton, deleteButton });
+            buttonPanel.Controls.AddRange(new Control[] { addCategoryButton, deleteButton });
             leftPanel.Controls.AddRange(new Control[] { categoryTreeView, buttonPanel });
 
             // Right panel with details
@@ -290,6 +281,12 @@ namespace PrintSystem.Dialogs
                 Location = new Point(bottomPanel.Width - 260, 5),
                 Anchor = AnchorStyles.Right
             };
+            
+            // Add click handler to ensure categories are saved before dialog closes
+            saveButton.Click += (s, e) => {
+                // Explicitly save categories to disk
+                CategoryManager.SaveCategories();
+            };
 
             var cancelButton = new Button
             {
@@ -414,7 +411,6 @@ namespace PrintSystem.Dialogs
             var nodeData = e.Node?.Tag as NodeData;
             if (nodeData == null) return;
 
-            addSubcategoryButton.Enabled = nodeData.Type == NodeType.Category;
             deleteButton.Enabled = nodeData.Type == NodeType.Category;
             editButton.Enabled = true;
             browseImageButton.Enabled = true;
@@ -471,44 +467,6 @@ namespace PrintSystem.Dialogs
             }
         }
 
-        private void AddSubcategoryButton_Click(object sender, EventArgs e)
-        {
-            var nodeData = categoryTreeView.SelectedNode?.Tag as NodeData;
-            if (nodeData?.Category == null) return;
-
-            using (var inputDialog = new CategoryInputDialog("Add Subcategory", nodeData.Category.Supplier, true))
-            {
-                if (inputDialog.ShowDialog() == DialogResult.OK)
-                {
-                    CategoryManager.AddSubCategory(inputDialog.CategoryName, nodeData.Category);
-                    LoadCategories();
-                }
-            }
-        }
-
-        private void EditButton_Click(object sender, EventArgs e)
-        {
-            var nodeData = categoryTreeView.SelectedNode?.Tag as NodeData;
-            if (nodeData == null || string.IsNullOrWhiteSpace(nameTextBox.Text)) return;
-
-            if (nodeData.Type == NodeType.Supplier)
-            {
-                var supplier = nodeData.Supplier;
-                if (supplier != null)
-                {
-                    supplier.Name = nameTextBox.Text;
-                    SupplierManager.UpdateSupplier(supplier);
-                }
-            }
-            else if (nodeData.Type == NodeType.Category)
-            {
-                nodeData.Category.Name = nameTextBox.Text;
-                CategoryManager.SaveCategories();
-            }
-
-            LoadCategories();
-        }
-
         private void DeleteButton_Click(object sender, EventArgs e)
         {
             var nodeData = categoryTreeView.SelectedNode?.Tag as NodeData;
@@ -552,12 +510,41 @@ namespace PrintSystem.Dialogs
             }
         }
 
+        private void EditButton_Click(object sender, EventArgs e)
+        {
+            var nodeData = categoryTreeView.SelectedNode?.Tag as NodeData;
+            if (nodeData == null || string.IsNullOrWhiteSpace(nameTextBox.Text)) return;
+
+            if (nodeData.Type == NodeType.Supplier)
+            {
+                var supplier = nodeData.Supplier;
+                if (supplier != null)
+                {
+                    supplier.Name = nameTextBox.Text;
+                    SupplierManager.UpdateSupplier(supplier);
+                }
+            }
+            else if (nodeData.Type == NodeType.Category)
+            {
+                nodeData.Category.Name = nameTextBox.Text;
+                CategoryManager.SaveCategories();
+            }
+
+            LoadCategories();
+        }
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             base.OnFormClosing(e);
             if (imagePreview.Image != null)
             {
                 imagePreview.Image.Dispose();
+            }
+            
+            // If the dialog is being closed with OK, ensure categories are saved
+            if (DialogResult == DialogResult.OK)
+            {
+                CategoryManager.SaveCategories();
             }
         }
     }
@@ -568,9 +555,8 @@ namespace PrintSystem.Dialogs
         public string SelectedSupplier { get; private set; }
         private TextBox nameTextBox;
         private ComboBox supplierComboBox;
-        private bool isSubcategory;
 
-        public CategoryInputDialog(string title, string currentSupplier = null, bool isSubcategory = false)
+        public CategoryInputDialog(string title, string currentSupplier = null)
         {
             this.Text = title;
             this.Size = new Size(400, 200);
@@ -579,7 +565,6 @@ namespace PrintSystem.Dialogs
             this.StartPosition = FormStartPosition.CenterParent;
             this.MaximizeBox = true;
             this.MinimizeBox = true;
-            this.isSubcategory = isSubcategory;
 
             var layout = new TableLayoutPanel
             {
@@ -602,46 +587,43 @@ namespace PrintSystem.Dialogs
             };
             layout.Controls.Add(nameTextBox, 1, 0);
 
-            if (!isSubcategory)
+            layout.Controls.Add(new Label { Text = "Supplier:", Anchor = AnchorStyles.Left }, 0, 1);
+            supplierComboBox = new ComboBox
             {
-                layout.Controls.Add(new Label { Text = "Supplier:", Anchor = AnchorStyles.Left }, 0, 1);
-                supplierComboBox = new ComboBox
-                {
-                    Dock = DockStyle.Fill,  // Make combo box fill its cell
-                    DropDownStyle = ComboBoxStyle.DropDownList,
-                    Anchor = AnchorStyles.Left | AnchorStyles.Right  // Allow horizontal stretching
-                };
+                Dock = DockStyle.Fill,  // Make combo box fill its cell
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Anchor = AnchorStyles.Left | AnchorStyles.Right  // Allow horizontal stretching
+            };
 
-                // Load entire Supplier objects
-                var suppliers = SupplierManager.GetSuppliers();
-                foreach (var supplier in suppliers)
-                {
-                    supplierComboBox.Items.Add(supplier);
-                }
-                supplierComboBox.DisplayMember = "Name";
+            // Load entire Supplier objects
+            var suppliers = SupplierManager.GetSuppliers();
+            foreach (var supplier in suppliers)
+            {
+                supplierComboBox.Items.Add(supplier);
+            }
+            supplierComboBox.DisplayMember = "Name";
 
-                // Select current supplier if provided
-                if (!string.IsNullOrEmpty(currentSupplier))
+            // Select current supplier if provided
+            if (!string.IsNullOrEmpty(currentSupplier))
+            {
+                for (int i = 0; i < supplierComboBox.Items.Count; i++)
                 {
-                    for (int i = 0; i < supplierComboBox.Items.Count; i++)
+                    var supplier = supplierComboBox.Items[i] as Supplier;
+                    if (supplier != null && supplier.Name.Equals(currentSupplier, StringComparison.OrdinalIgnoreCase))
                     {
-                        var supplier = supplierComboBox.Items[i] as Supplier;
-                        if (supplier != null && supplier.Name.Equals(currentSupplier, StringComparison.OrdinalIgnoreCase))
-                        {
-                            supplierComboBox.SelectedIndex = i;
-                            break;
-                        }
+                        supplierComboBox.SelectedIndex = i;
+                        break;
                     }
                 }
-
-                // If no supplier was selected and we have items, select the first one
-                if (supplierComboBox.SelectedIndex == -1 && supplierComboBox.Items.Count > 0)
-                {
-                    supplierComboBox.SelectedIndex = 0;
-                }
-
-                layout.Controls.Add(supplierComboBox, 1, 1);
             }
+
+            // If no supplier was selected and we have items, select the first one
+            if (supplierComboBox.SelectedIndex == -1 && supplierComboBox.Items.Count > 0)
+            {
+                supplierComboBox.SelectedIndex = 0;
+            }
+
+            layout.Controls.Add(supplierComboBox, 1, 1);
 
             var buttonPanel = new Panel { Dock = DockStyle.Fill };
             var okButton = new Button
@@ -668,7 +650,7 @@ namespace PrintSystem.Dialogs
                     return;
                 }
 
-                if (!isSubcategory && supplierComboBox.SelectedItem == null)
+                if (supplierComboBox.SelectedItem == null)
                 {
                     MessageBox.Show("Please select a supplier.", "Validation Error");
                     DialogResult = DialogResult.None;
@@ -677,24 +659,16 @@ namespace PrintSystem.Dialogs
 
                 CategoryName = nameTextBox.Text;
                 
-                // Get supplier name from either the parent category or selected supplier
-                if (isSubcategory)
+                var selectedSupplier = supplierComboBox.SelectedItem as Supplier;
+                if (selectedSupplier != null)
                 {
-                    SelectedSupplier = currentSupplier;
+                    SelectedSupplier = selectedSupplier.Name;
                 }
                 else
                 {
-                    var selectedSupplier = supplierComboBox.SelectedItem as Supplier;
-                    if (selectedSupplier != null)
-                    {
-                        SelectedSupplier = selectedSupplier.Name;
-                    }
-                    else
-                    {
-                        MessageBox.Show("Invalid supplier selection.", "Error");
-                        DialogResult = DialogResult.None;
-                        return;
-                    }
+                    MessageBox.Show("Invalid supplier selection.", "Error");
+                    DialogResult = DialogResult.None;
+                    return;
                 }
             };
 
