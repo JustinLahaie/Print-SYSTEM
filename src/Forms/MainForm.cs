@@ -460,7 +460,10 @@ namespace PrintSystem.Forms
             {
                 try
                 {
-                    string imageKey = $"category_{category.Name}";
+                    // Include supplier name in the image key to prevent conflicts between suppliers
+                    string imageKey = $"category_{category.Supplier}_{category.Name}";
+                    Console.WriteLine($"Loading category image for {category.Supplier}/{category.Name} from {category.ImagePath}");
+                    
                     if (!cachedImages.ContainsKey(imageKey))
                     {
                         using (var originalImage = Image.FromFile(category.ImagePath))
@@ -503,11 +506,22 @@ namespace PrintSystem.Forms
                     
                     node.ImageKey = imageKey;
                     node.SelectedImageKey = imageKey;
+                    Console.WriteLine($"Set image key {imageKey} for category {category.Name}");
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"Error loading category image for {category.Name}: {ex.Message}");
+                    // Make sure to clear any image keys on error
+                    node.ImageKey = null;
+                    node.SelectedImageKey = null;
                 }
+            }
+            else
+            {
+                // Explicitly clear image keys when category has no image
+                node.ImageKey = null;
+                node.SelectedImageKey = null;
+                Console.WriteLine($"Category {category.Supplier}/{category.Name} has no custom image");
             }
             
             // Add items that belong directly to this category
@@ -575,7 +589,8 @@ namespace PrintSystem.Forms
             {
                 try
                 {
-                    string imageKey = item.ModelNumber;
+                    // Include supplier in the image key to prevent conflicts
+                    string imageKey = $"item_{item.Supplier}_{item.ModelNumber}";
                     if (!cachedImages.ContainsKey(imageKey))
                     {
                         using (var originalImage = Image.FromFile(item.ImagePath))
@@ -622,7 +637,16 @@ namespace PrintSystem.Forms
                 catch (Exception ex)
                 {
                     MessageBox.Show($"Error loading image for {item.ModelNumber}: {ex.Message}", "Image Load Error");
+                    // Clear image keys on error
+                    node.ImageKey = null;
+                    node.SelectedImageKey = null;
                 }
+            }
+            else
+            {
+                // Explicitly clear image keys when item has no image
+                node.ImageKey = null;
+                node.SelectedImageKey = null;
             }
 
             return node;
@@ -666,19 +690,22 @@ namespace PrintSystem.Forms
                         selectedNode.Remove();
 
                         // Now clean up images after the node is removed
-                        if (imageList.Images.ContainsKey(item.ModelNumber))
+                        // Use the new image key format that includes supplier
+                        string itemImageKey = $"item_{item.Supplier}_{item.ModelNumber}";
+                        
+                        if (imageList.Images.ContainsKey(itemImageKey))
                         {
-                            imageList.Images.RemoveByKey(item.ModelNumber);
+                            imageList.Images.RemoveByKey(itemImageKey);
                         }
-                        if (smallImageList.Images.ContainsKey(item.ModelNumber))
+                        if (smallImageList.Images.ContainsKey(itemImageKey))
                         {
-                            smallImageList.Images.RemoveByKey(item.ModelNumber);
+                            smallImageList.Images.RemoveByKey(itemImageKey);
                         }
-                        if (cachedImages.ContainsKey(item.ModelNumber))
+                        if (cachedImages.ContainsKey(itemImageKey))
                         {
-                            using (var image = cachedImages[item.ModelNumber])
+                            using (var image = cachedImages[itemImageKey])
                             {
-                                cachedImages.Remove(item.ModelNumber);
+                                cachedImages.Remove(itemImageKey);
                             }
                         }
 
