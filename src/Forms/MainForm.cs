@@ -20,7 +20,8 @@ namespace PrintSystem.Forms
         private ImageList imageList;
         private ImageList smallImageList;
         private Dictionary<string, Image> cachedImages;
-        private readonly string supplierLogosPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "SupplierLogos");
+        private readonly string supplierLogosPath = "SupplierLogos";
+        private readonly string itemImagesPath = "ItemImages";
         private ContextMenuStrip treeViewContextMenu;
 
         public MainForm()
@@ -30,11 +31,11 @@ namespace PrintSystem.Forms
                 // Initialize the dictionary first
                 cachedImages = new Dictionary<string, Image>();
 
-                if (!Directory.Exists(supplierLogosPath))
-                {
-                    Directory.CreateDirectory(supplierLogosPath);
-                    Console.WriteLine($"Created directory: {supplierLogosPath}");
-                }
+                // Create necessary directories
+                CreatePortableDirectories();
+
+                // Clean up any stale cached images
+                CleanupStaleImages();
 
                 // Copy logo files if they don't exist in the target directory
                 string marathonSource = "Marathon_Logo.png";
@@ -71,6 +72,13 @@ namespace PrintSystem.Forms
             {
                 MessageBox.Show($"Error in constructor: {ex.Message}\nStack Trace:\n{ex.StackTrace}", "Error");
             }
+        }
+
+        private void CreatePortableDirectories()
+        {
+            // Create necessary directories if they don't exist
+            Directory.CreateDirectory(supplierLogosPath);
+            Directory.CreateDirectory(itemImagesPath);
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -271,9 +279,31 @@ namespace PrintSystem.Forms
             treeView.BeginUpdate();
             try
             {
+                // Store expanded state before clearing
+                var expandedPaths = new HashSet<string>();
+                StoreExpandedState(treeView.Nodes, expandedPaths);
+                
                 treeView.Nodes.Clear();
+                
+                // Dispose of existing images before clearing
+                foreach (Image img in imageList.Images)
+                {
+                    img?.Dispose();
+                }
                 imageList.Images.Clear();
+                
+                foreach (Image img in smallImageList.Images)
+                {
+                    img?.Dispose();
+                }
                 smallImageList.Images.Clear();
+                
+                // Clear cached images
+                foreach (var kvp in cachedImages)
+                {
+                    kvp.Value?.Dispose();
+                }
+                cachedImages.Clear();
 
                 var items = ItemManager.GetItems();
                 var suppliers = SupplierManager.GetSuppliers();
@@ -511,6 +541,30 @@ namespace PrintSystem.Forms
             }
         }
 
+        private void StoreExpandedState(TreeNodeCollection nodes, HashSet<string> expandedPaths)
+        {
+            foreach (TreeNode node in nodes)
+            {
+                if (node.IsExpanded)
+                {
+                    expandedPaths.Add(GetNodePath(node));
+                }
+                StoreExpandedState(node.Nodes, expandedPaths);
+            }
+        }
+
+        private string GetNodePath(TreeNode node)
+        {
+            var path = node.Text;
+            var parent = node.Parent;
+            while (parent != null)
+            {
+                path = parent.Text + "/" + path;
+                parent = parent.Parent;
+            }
+            return path;
+        }
+
         private TreeNode CreateItemNode(Item item)
         {
             var node = new TreeNode();
@@ -654,6 +708,59 @@ namespace PrintSystem.Forms
             }
         }
 
+        private void CleanupStaleImages()
+        {
+            try
+            {
+                // Clear existing image lists
+                if (imageList != null)
+                {
+                    imageList.Images.Clear();
+                }
+                if (smallImageList != null)
+                {
+                    smallImageList.Images.Clear();
+                }
+
+                // Clean up cached images
+                if (cachedImages != null)
+                {
+                    foreach (var image in cachedImages.Values)
+                    {
+                        try
+                        {
+                            image.Dispose();
+                        }
+                        catch { /* Ignore disposal errors */ }
+                    }
+                    cachedImages.Clear();
+                }
+
+                // Clean up stale item images
+                if (Directory.Exists(itemImagesPath))
+                {
+                    var items = ItemManager.GetItems();
+                    var validImagePaths = items.Select(i => i.ImagePath).Where(p => !string.IsNullOrEmpty(p)).ToHashSet();
+                    
+                    foreach (var file in Directory.GetFiles(itemImagesPath))
+                    {
+                        if (!validImagePaths.Contains(file))
+                        {
+                            try
+                            {
+                                File.Delete(file);
+                            }
+                            catch { /* Ignore deletion errors */ }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error cleaning up stale images: {ex.Message}");
+            }
+        }
+
         [STAThread]
         static void Main()
         {
@@ -663,7 +770,47 @@ namespace PrintSystem.Forms
             // Clean up any invalid categories before starting
             CategoryManager.CleanupInvalidCategories();
             
+            // Perform a full cleanup of stale data
+            CleanupStaleData();
+            
             Application.Run(new MainForm());
+        }
+
+        private static void CleanupStaleData()
+        {
+            try
+            {
+                // Reload categories to ensure clean state
+                CategoryManager.ReloadCategories();
+
+                // Get all items and validate their relationships
+                var items = ItemManager.GetItems().ToList();
+                foreach (var item in items)
+                {
+                    if (item.Category != null)
+                    {
+                        // Validate category exists and matches supplier
+                        var categories = CategoryManager.GetCategories(item.Supplier);
+                        if (!categories.Contains(item.Category))
+                        {
+                            // Find or create Uncategorized category
+                            var uncategorized = categories.FirstOrDefault(c => c.Name == "Uncategorized")
+                                ?? CategoryManager.AddCategory("Uncategorized", item.Supplier);
+                            
+                            // Move item to Uncategorized
+                            CategoryManager.RemoveItemFromCategory(item, item.Category);
+                            CategoryManager.AddItemToCategory(item, uncategorized);
+                        }
+                    }
+                }
+
+                // Save changes
+                CategoryManager.SaveCategories();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error during cleanup: {ex.Message}", "Cleanup Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
         }
     }
 } 

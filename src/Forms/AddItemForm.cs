@@ -417,16 +417,28 @@ namespace PrintSystem.Forms
 
                     string imagesFolder = Path.Combine(Application.StartupPath, "Images");
 
-                    if ((supplier == "Marathon" && product.ImageUrls?.Count > 0) ||
-                        (supplier == "Richelieu" && product.ImageUrls?.Count > 0))
+                                    // Safely check for ImageUrls property and its count
+                bool hasImages = false;
+                if (product != null)
+                {
+                    var imageUrlsProperty = product.GetType().GetProperty("ImageUrls");
+                    if (imageUrlsProperty != null)
                     {
-                        statusLabel.Text = "Downloading images...";
-                        LogDebug("Starting image downloads...");
-                        Application.DoEvents();
+                        var imageUrls = imageUrlsProperty.GetValue(product) as List<string>;
+                        hasImages = imageUrls != null && imageUrls.Count > 0;
+                    }
+                }
 
-                        downloadedImages = supplier == "Marathon" 
-                            ? await MarathonScraper.DownloadImagesAsync(product.ImageUrls, imagesFolder)
-                            : await RichelieuScraper.DownloadImagesAsync(product.ImageUrls, imagesFolder);
+                if (hasImages)
+                {
+                    statusLabel.Text = "Downloading images...";
+                    LogDebug("Starting image downloads...");
+                    Application.DoEvents();
+
+                    var imageUrls = (List<string>)product.GetType().GetProperty("ImageUrls").GetValue(product);
+                    downloadedImages = supplier == "Marathon" 
+                        ? await MarathonScraper.DownloadImagesAsync(imageUrls, imagesFolder)
+                        : await RichelieuScraper.DownloadImagesAsync(imageUrls, imagesFolder);
                         
                         if (downloadedImages.Count > 0)
                         {

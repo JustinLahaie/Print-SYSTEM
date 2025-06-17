@@ -9,9 +9,30 @@ namespace PrintSystem.Models
         private static int nextId = 1;
         private Category category;
         
+        static Item()
+        {
+            // Initialize nextId from ItemManager to maintain consistency across sessions
+            nextId = ItemManager.GetNextAvailableId();
+        }
+        
         public Item()
         {
             Id = nextId++;
+            // Notify ItemManager of the new maximum ID
+            ItemManager.UpdateMaxId(Id);
+        }
+        
+        // Constructor for deserialization - doesn't increment nextId
+        [JsonConstructor]
+        public Item(int id)
+        {
+            Id = id;
+            // Update nextId if this ID is higher
+            if (id >= nextId)
+            {
+                nextId = id + 1;
+                ItemManager.UpdateMaxId(id);
+            }
         }
         
         public int Id { get; private set; }
@@ -51,29 +72,36 @@ namespace PrintSystem.Models
             }
         }
 
-        // Add a property to store the category path for serialization
+        [JsonPropertyName("categoryPath")]
         public string CategoryPath 
         { 
-            get => Category?.GetFullPath();
+            get => Category?.GetFullPath() ?? "";
             set
             {
                 if (string.IsNullOrEmpty(value)) return;
                 
-                // Split the path and find the category
-                var pathParts = value.Split(new[] { " > " }, StringSplitOptions.RemoveEmptyEntries);
-                if (pathParts.Length > 0)
+                try
                 {
-                    var supplier = pathParts[0];
-                    var categories = CategoryManager.GetCategories(supplier);
-                    
-                    foreach (var category in categories)
+                    // Split the path and find the category
+                    var pathParts = value.Split(new[] { " > " }, StringSplitOptions.RemoveEmptyEntries);
+                    if (pathParts.Length > 0)
                     {
-                        if (category.GetFullPath() == value)
+                        var supplier = pathParts[0];
+                        var categories = CategoryManager.GetCategories(supplier);
+                        
+                        foreach (var category in categories)
                         {
-                            Category = category;
-                            break;
+                            if (category.GetFullPath() == value)
+                            {
+                                Category = category;
+                                break;
+                            }
                         }
                     }
+                }
+                catch (Exception ex)
+                {
+                    System.Windows.Forms.MessageBox.Show($"Error setting category path: {ex.Message}", "Error");
                 }
             }
         }

@@ -23,6 +23,7 @@ namespace PrintSystem.Dialogs
 
         public SettingsDialog()
         {
+            labelTemplates = new Dictionary<string, LabelTemplate>();
             LoadLabelTemplates();
             InitializeComponents();
             LoadCurrentSettings();
@@ -32,20 +33,78 @@ namespace PrintSystem.Dialogs
         {
             try
             {
-                if (File.Exists(LABEL_TEMPLATES_FILE))
+                labelTemplates.Clear();
+                
+                // Create default templates if file doesn't exist
+                if (!File.Exists(LABEL_TEMPLATES_FILE))
                 {
-                    string json = File.ReadAllText(LABEL_TEMPLATES_FILE);
-                    labelTemplates = JsonSerializer.Deserialize<Dictionary<string, LabelTemplate>>(json);
+                    // Create a default template dictionary
+                    var defaultTemplates = new Dictionary<string, LabelTemplate>
+                    {
+                        ["MAIN"] = new LabelTemplate 
+                        { 
+                            Name = "MAIN", 
+                            Width = 100, 
+                            Height = 50, 
+                            Elements = new List<LabelElementInfo>() 
+                        }
+                    };
+                    
+                    string json = System.Text.Json.JsonSerializer.Serialize(defaultTemplates, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                    File.WriteAllText(LABEL_TEMPLATES_FILE, json);
+                    labelTemplates = defaultTemplates;
                 }
                 else
                 {
-                    labelTemplates = new Dictionary<string, LabelTemplate>();
+                    string json = File.ReadAllText(LABEL_TEMPLATES_FILE);
+                    if (!string.IsNullOrWhiteSpace(json) && json != "{}")
+                    {
+                        // Try to deserialize as Dictionary<string, LabelTemplate>
+                        try
+                        {
+                            var templates = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, LabelTemplate>>(json);
+                            if (templates != null)
+                            {
+                                labelTemplates = templates;
+                            }
+                        }
+                        catch
+                        {
+                            // If deserialization fails, create default
+                            labelTemplates["MAIN"] = new LabelTemplate 
+                            { 
+                                Name = "MAIN", 
+                                Width = 100, 
+                                Height = 50, 
+                                Elements = new List<LabelElementInfo>() 
+                            };
+                        }
+                    }
+                }
+                
+                // Ensure at least one template exists
+                if (labelTemplates.Count == 0)
+                {
+                    labelTemplates["MAIN"] = new LabelTemplate 
+                    { 
+                        Name = "MAIN", 
+                        Width = 100, 
+                        Height = 50, 
+                        Elements = new List<LabelElementInfo>() 
+                    };
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error loading label templates: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                labelTemplates = new Dictionary<string, LabelTemplate>();
+                MessageBox.Show($"Error loading label templates: {ex.Message}\nDefault template will be used.", "Warning");
+                labelTemplates.Clear();
+                labelTemplates["MAIN"] = new LabelTemplate 
+                { 
+                    Name = "MAIN", 
+                    Width = 100, 
+                    Height = 50, 
+                    Elements = new List<LabelElementInfo>() 
+                };
             }
         }
 

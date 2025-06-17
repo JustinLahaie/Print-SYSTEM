@@ -100,55 +100,51 @@ namespace PrintSystem.Dialogs
         {
             try
             {
-                bool templatesLoaded = false;
-                
-                if (File.Exists(QR_TEMPLATES_FILE))
+                // Create default templates if file doesn't exist
+                if (!File.Exists(QR_TEMPLATES_FILE))
+                {
+                    qrTemplates = CreateDefaultQRTemplates();
+                    SaveQRTemplates();
+                    SaveDebugInfo("Created default QR templates file");
+                }
+                else
                 {
                     try
                     {
                         string json = File.ReadAllText(QR_TEMPLATES_FILE);
-                        var loadedTemplates = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
-                        if (loadedTemplates != null && loadedTemplates.Count > 0)
+                        if (string.IsNullOrWhiteSpace(json) || json == "{}")
                         {
-                            qrTemplates = loadedTemplates;
-                            templatesLoaded = true;
+                            qrTemplates = CreateDefaultQRTemplates();
+                            SaveDebugInfo("Loaded default QR templates (file was empty)");
+                        }
+                        else
+                        {
+                            qrTemplates = JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? CreateDefaultQRTemplates();
+                            SaveDebugInfo($"Loaded {qrTemplates.Count} QR templates from file");
                         }
                     }
                     catch (Exception ex)
                     {
-                        SaveDebugInfo($"Error deserializing QR templates: {ex.Message}");
-                        templatesLoaded = false;
+                        SaveDebugInfo($"Error reading QR templates: {ex.Message}");
+                        qrTemplates = CreateDefaultQRTemplates();
+                        SaveQRTemplates(); // Save the defaults
                     }
                 }
                 
-                // If no templates were loaded, create default templates
-                if (!templatesLoaded)
+                // Ensure we always have at least one template
+                if (qrTemplates.Count == 0)
                 {
                     qrTemplates = CreateDefaultQRTemplates();
-                    try
-                    {
-                        SaveQRTemplates(); // Save the default templates
-                    }
-                    catch (Exception ex)
-                    {
-                        SaveDebugInfo($"Error saving default QR templates: {ex.Message}");
-                    }
-                }
-                
-                // Only update the combo box if it's not disposed
-                if (qrTemplateComboBox != null && !qrTemplateComboBox.IsDisposed && !this.IsDisposed)
-                {
-                    UpdateQRTemplateComboBox();
+                    SaveQRTemplates();
                 }
             }
             catch (Exception ex)
             {
-                // Log the error but don't show a message box to avoid UI issues during preview
-                SaveDebugInfo($"Error loading QR templates: {ex.Message}");
-                
-                // Always ensure we have default templates
+                SaveDebugInfo($"Error in LoadQRTemplates: {ex.Message}");
                 qrTemplates = CreateDefaultQRTemplates();
             }
+
+            UpdateQRTemplateComboBox();
         }
         
         private Dictionary<string, string> CreateDefaultQRTemplates()
@@ -268,60 +264,83 @@ namespace PrintSystem.Dialogs
         {
             try
             {
-                Dictionary<string, LabelTemplate> loadedTemplates = null;
-                
-                // Use a file lock to prevent concurrent access
-                try
+                // Create default templates if file doesn't exist
+                if (!File.Exists(LABEL_TEMPLATES_FILE))
                 {
-                    using (var fileStream = new FileStream(LABEL_TEMPLATES_FILE, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read))
-                using (var streamReader = new StreamReader(fileStream))
+                    labelTemplates = new Dictionary<string, LabelTemplate>();
+                    labelTemplates["MAIN"] = CreateDefaultMainTemplate();
+                    SaveLabelTemplates();
+                    SaveDebugInfo("Created default label templates file");
+                }
+                else
                 {
-                    if (fileStream.Length > 0)
+                    try
                     {
-                        string json = streamReader.ReadToEnd();
-                        loadedTemplates = JsonSerializer.Deserialize<Dictionary<string, LabelTemplate>>(json);
+                        using (var fileStream = new FileStream(LABEL_TEMPLATES_FILE, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read))
+                        {
+                            if (fileStream.Length == 0)
+                            {
+                                // File is empty, create default templates
+                                labelTemplates = new Dictionary<string, LabelTemplate>();
+                                labelTemplates["MAIN"] = CreateDefaultMainTemplate();
+                                
+                                // Write defaults to the file
+                                var json = JsonSerializer.Serialize(labelTemplates);
+                                var bytes = System.Text.Encoding.UTF8.GetBytes(json);
+                                fileStream.Write(bytes, 0, bytes.Length);
+                                
+                                SaveDebugInfo("Created default label templates (file was empty)");
+                            }
+                            else
+                            {
+                                // Read existing templates
+                                fileStream.Seek(0, SeekOrigin.Begin);
+                                using (var reader = new StreamReader(fileStream))
+                                {
+                                    var json = reader.ReadToEnd();
+                                    labelTemplates = JsonSerializer.Deserialize<Dictionary<string, LabelTemplate>>(json) ?? new Dictionary<string, LabelTemplate>();
+                                    SaveDebugInfo($"Loaded {labelTemplates.Count} label templates from file");
+                                }
+                            }
+                        }
                     }
+                    catch (Exception ex)
+                    {
+                        SaveDebugInfo($"Error reading label templates: {ex.Message}");
+                        labelTemplates = new Dictionary<string, LabelTemplate>();
+                        labelTemplates["MAIN"] = CreateDefaultMainTemplate();
+                        SaveLabelTemplates(); // Save the defaults
                     }
                 }
-                catch (IOException ioEx)
-                {
-                    // Log file access error but continue with defaults
-                    Console.WriteLine($"IO Exception: {ioEx.Message}");
-                    // Don't rethrow - we'll create a default template
-                }
-
-                // Initialize templates dictionary if null
-                labelTemplates = loadedTemplates ?? new Dictionary<string, LabelTemplate>();
-
-                // Validate all templates and remove invalid ones
-                var invalidTemplates = labelTemplates.Where(kvp => !kvp.Value.IsValid()).Select(kvp => kvp.Key).ToList();
-                foreach (var key in invalidTemplates)
-                {
-                    labelTemplates.Remove(key);
-                }
-
-                // Ensure MAIN template exists and is valid
-                if (!labelTemplates.ContainsKey("MAIN") || !labelTemplates["MAIN"].IsValid())
+                
+                // Ensure we always have at least the MAIN template
+                if (!labelTemplates.ContainsKey("MAIN"))
                 {
                     labelTemplates["MAIN"] = CreateDefaultMainTemplate();
                     SaveLabelTemplates();
                 }
-
-                // Update template combo box if it exists
-                UpdateTemplateComboBox();
+                
+                // Clean up any invalid templates
+                var invalidTemplates = labelTemplates.Where(kvp => !kvp.Value.IsValid()).Select(kvp => kvp.Key).ToList();
+                foreach (var key in invalidTemplates)
+                {
+                    SaveDebugInfo($"Removing invalid template: {key}");
+                    labelTemplates.Remove(key);
+                }
+                
+                if (invalidTemplates.Any())
+                {
+                    SaveLabelTemplates();
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error loading label templates: {ex.Message}\nDefault templates will be used.", "Warning", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                labelTemplates = new Dictionary<string, LabelTemplate>
-                {
-                    ["MAIN"] = CreateDefaultMainTemplate()
-                };
-                SaveLabelTemplates();
-                
-                // Make sure to update the combo box even after an exception
-                UpdateTemplateComboBox();
+                SaveDebugInfo($"Error in LoadLabelTemplates: {ex.Message}");
+                labelTemplates = new Dictionary<string, LabelTemplate>();
+                labelTemplates["MAIN"] = CreateDefaultMainTemplate();
             }
+
+            UpdateTemplateComboBox();
         }
 
         private void UpdateTemplateComboBox()

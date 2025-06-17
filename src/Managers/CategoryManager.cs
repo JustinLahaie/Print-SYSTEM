@@ -10,11 +10,19 @@ namespace PrintSystem.Managers
 {
     public static class CategoryManager
     {
-        private static readonly string categoriesFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "categories.json");
-        private static readonly string categoryImagesDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "CategoryImages");
+        private static readonly string categoriesFilePath = "categories.json";
+        private static readonly string categoryImagesDir = "CategoryImages";
         private static Dictionary<string, List<Category>> supplierCategories = new Dictionary<string, List<Category>>();
         private static readonly object lockObject = new object();
         private static bool isInitialized = false;
+
+        private static readonly JsonSerializerOptions jsonOptions = new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNameCaseInsensitive = true,
+            ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.Preserve,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        };
 
         static CategoryManager()
         {
@@ -39,7 +47,7 @@ namespace PrintSystem.Managers
                         try
                         {
                             string jsonData = File.ReadAllText(categoriesFilePath);
-                            var loadedCategories = JsonSerializer.Deserialize<Dictionary<string, List<Category>>>(jsonData);
+                            var loadedCategories = JsonSerializer.Deserialize<Dictionary<string, List<Category>>>(jsonData, jsonOptions);
                             
                             // Normalize supplier names to match the case from SupplierManager
                             var suppliers = SupplierManager.GetSuppliers();
@@ -168,7 +176,7 @@ namespace PrintSystem.Managers
         {
             try
             {
-                string jsonData = JsonSerializer.Serialize(supplierCategories, new JsonSerializerOptions { WriteIndented = true });
+                string jsonData = JsonSerializer.Serialize(supplierCategories, jsonOptions);
                 File.WriteAllText(categoriesFilePath, jsonData);
             }
             catch (Exception ex)
@@ -209,6 +217,16 @@ namespace PrintSystem.Managers
                 throw new ArgumentNullException(nameof(parentCategory));
 
             var subCategory = parentCategory.AddSubCategory(name);
+            
+            // Ensure the subcategory is properly linked to its parent
+            subCategory.ParentCategory = parentCategory;
+            
+            // If the parent is a top-level category, make sure it's in the supplier categories list
+            if (parentCategory.ParentCategory == null && !supplierCategories[parentCategory.Supplier].Contains(parentCategory))
+            {
+                supplierCategories[parentCategory.Supplier].Add(parentCategory);
+            }
+            
             SaveCategories();
             return subCategory;
         }
@@ -300,17 +318,23 @@ namespace PrintSystem.Managers
 
         public static List<Category> GetCategories(string supplier)
         {
-            if (!supplierCategories.ContainsKey(supplier))
+            lock (lockObject)
             {
-                supplierCategories[supplier] = new List<Category>();
+                if (!supplierCategories.ContainsKey(supplier))
+                {
+                    supplierCategories[supplier] = new List<Category>();
+                }
+                var categories = supplierCategories[supplier];
+                return new List<Category>(categories); // Return a copy to prevent external modification
             }
-            var categories = supplierCategories[supplier];
-            return categories;
         }
 
         public static List<Category> GetAllCategories()
         {
-            return supplierCategories.Values.SelectMany(x => x).ToList();
+            lock (lockObject)
+            {
+                return supplierCategories.Values.SelectMany(x => x).ToList();
+            }
         }
 
         public static void MoveCategory(Category category, Category newParent)
@@ -318,8 +342,11 @@ namespace PrintSystem.Managers
             if (category == null) return;
             if (newParent != null && category.Supplier != newParent.Supplier) return;
 
-            category.MoveToParent(newParent);
-            SaveCategories();
+            lock (lockObject)
+            {
+                category.MoveToParent(newParent);
+                SaveCategories();
+            }
         }
 
         public static void UpdateCategoryImage(Category category, string imagePath)
